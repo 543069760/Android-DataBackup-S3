@@ -2,6 +2,7 @@ package com.xayah.core.service.util
 
 import android.content.Context
 import android.content.pm.PackageManager
+import com.xayah.core.model.util.formatToStorageSizePerSecond
 import com.xayah.core.common.util.toLineString
 import com.xayah.core.data.repository.CloudRepository
 import com.xayah.core.data.repository.PackageRepository
@@ -51,31 +52,32 @@ class PackagesBackupUtil @Inject constructor(
         msg
     }
 
-    private suspend fun PackageEntity.getDataSelected(dataType: DataType) = when (context.readSelectionType().first()) {
-        SelectionType.DEFAULT -> {
-            when (dataType) {
-                DataType.PACKAGE_APK -> apkSelected
-                DataType.PACKAGE_USER -> userSelected
-                DataType.PACKAGE_USER_DE -> userDeSelected
-                DataType.PACKAGE_DATA -> dataSelected
-                DataType.PACKAGE_OBB -> obbSelected
-                DataType.PACKAGE_MEDIA -> mediaSelected
-                else -> false
+    private suspend fun PackageEntity.getDataSelected(dataType: DataType) =
+        when (context.readSelectionType().first()) {
+            SelectionType.DEFAULT -> {
+                when (dataType) {
+                    DataType.PACKAGE_APK -> apkSelected
+                    DataType.PACKAGE_USER -> userSelected
+                    DataType.PACKAGE_USER_DE -> userDeSelected
+                    DataType.PACKAGE_DATA -> dataSelected
+                    DataType.PACKAGE_OBB -> obbSelected
+                    DataType.PACKAGE_MEDIA -> mediaSelected
+                    else -> false
+                }
+            }
+
+            SelectionType.APK -> {
+                dataType == DataType.PACKAGE_APK
+            }
+
+            SelectionType.DATA -> {
+                dataType != DataType.PACKAGE_APK
+            }
+
+            SelectionType.BOTH -> {
+                true
             }
         }
-
-        SelectionType.APK -> {
-            dataType == DataType.PACKAGE_APK
-        }
-
-        SelectionType.DATA -> {
-            dataType != DataType.PACKAGE_APK
-        }
-
-        SelectionType.BOTH -> {
-            true
-        }
-    }
 
     private fun PackageEntity.getDataBytes(dataType: DataType) = when (dataType) {
         DataType.PACKAGE_APK -> dataStats.apkBytes
@@ -97,15 +99,16 @@ class PackagesBackupUtil @Inject constructor(
         else -> Unit
     }
 
-    private fun PackageEntity.setDisplayBytes(dataType: DataType, sizeBytes: Long) = when (dataType) {
-        DataType.PACKAGE_APK -> displayStats.apkBytes = sizeBytes
-        DataType.PACKAGE_USER -> displayStats.userBytes = sizeBytes
-        DataType.PACKAGE_USER_DE -> displayStats.userDeBytes = sizeBytes
-        DataType.PACKAGE_DATA -> displayStats.dataBytes = sizeBytes
-        DataType.PACKAGE_OBB -> displayStats.obbBytes = sizeBytes
-        DataType.PACKAGE_MEDIA -> displayStats.mediaBytes = sizeBytes
-        else -> Unit
-    }
+    private fun PackageEntity.setDisplayBytes(dataType: DataType, sizeBytes: Long) =
+        when (dataType) {
+            DataType.PACKAGE_APK -> displayStats.apkBytes = sizeBytes
+            DataType.PACKAGE_USER -> displayStats.userBytes = sizeBytes
+            DataType.PACKAGE_USER_DE -> displayStats.userDeBytes = sizeBytes
+            DataType.PACKAGE_DATA -> displayStats.dataBytes = sizeBytes
+            DataType.PACKAGE_OBB -> displayStats.obbBytes = sizeBytes
+            DataType.PACKAGE_MEDIA -> displayStats.mediaBytes = sizeBytes
+            else -> Unit
+        }
 
     private suspend fun TaskDetailPackageEntity.updateInfo(
         dataType: DataType,
@@ -214,11 +217,17 @@ class PackagesBackupUtil @Inject constructor(
         ShellResult(code = if (isSuccess) 0 else -1, input = listOf(), out = out)
     }
 
-    private suspend fun getPackageSourceDir(packageName: String, userId: Int) = rootService.getPackageSourceDir(packageName, userId).let { list ->
-        if (list.isNotEmpty()) PathUtil.getParentPath(list[0]) else ""
-    }
+    private suspend fun getPackageSourceDir(packageName: String, userId: Int) =
+        rootService.getPackageSourceDir(packageName, userId).let { list ->
+            if (list.isNotEmpty()) PathUtil.getParentPath(list[0]) else ""
+        }
 
-    suspend fun backupApk(p: PackageEntity, r: PackageEntity?, t: TaskDetailPackageEntity, dstDir: String): ShellResult = run {
+    suspend fun backupApk(
+        p: PackageEntity,
+        r: PackageEntity?,
+        t: TaskDetailPackageEntity,
+        dstDir: String
+    ): ShellResult = run {
         log { "Backing up apk..." }
 
         val dataType = DataType.PACKAGE_APK
@@ -236,13 +245,22 @@ class PackagesBackupUtil @Inject constructor(
         } else {
             if (srcDir.isNotEmpty()) {
                 val sizeBytes = rootService.calculateSize(srcDir)
-                t.updateInfo(dataType = dataType, state = OperationState.PROCESSING, bytes = sizeBytes)
+                t.updateInfo(
+                    dataType = dataType,
+                    state = OperationState.PROCESSING,
+                    bytes = sizeBytes
+                )
                 if (rootService.exists(dst) && sizeBytes == r?.getDataBytes(dataType)) {
                     isSuccess = true
                     t.updateInfo(dataType = dataType, state = OperationState.SKIP)
                     out.add(log { "Data has not changed." })
                 } else {
-                    Tar.compressInCur(cur = srcDir, src = "./*.apk", dst = dst, extra = ct.getCompressPara(context.readCompressionLevel().first()))
+                    Tar.compressInCur(
+                        cur = srcDir,
+                        src = "./*.apk",
+                        dst = dst,
+                        extra = ct.getCompressPara(context.readCompressionLevel().first())
+                    )
                         .also { result ->
                             isSuccess = result.isSuccess
                             out.addAll(result.out)
@@ -260,7 +278,11 @@ class PackagesBackupUtil @Inject constructor(
                 isSuccess = false
                 out.add(log { "Failed to get apk path of $packageName." })
             }
-            t.updateInfo(dataType = dataType, state = if (isSuccess) OperationState.DONE else OperationState.ERROR, log = out.toLineString())
+            t.updateInfo(
+                dataType = dataType,
+                state = if (isSuccess) OperationState.DONE else OperationState.ERROR,
+                log = out.toLineString()
+            )
         }
 
         ShellResult(code = if (isSuccess) 0 else -1, input = listOf(), out = out)
@@ -269,7 +291,13 @@ class PackagesBackupUtil @Inject constructor(
     /**
      * Package data: USER, USER_DE, DATA, OBB, MEDIA
      */
-    suspend fun backupData(p: PackageEntity, t: TaskDetailPackageEntity, r: PackageEntity?, dataType: DataType, dstDir: String): ShellResult = run {
+    suspend fun backupData(
+        p: PackageEntity,
+        t: TaskDetailPackageEntity,
+        r: PackageEntity?,
+        dataType: DataType,
+        dstDir: String
+    ): ShellResult = run {
         log { "Backing up ${dataType.type}..." }
 
         val packageName = p.packageName
@@ -291,11 +319,19 @@ class PackagesBackupUtil @Inject constructor(
                     if (dataType == DataType.PACKAGE_USER) {
                         isSuccess = false
                         out.add(log { "Not exist: $src" })
-                        t.updateInfo(dataType = dataType, state = OperationState.ERROR, log = out.toLineString())
+                        t.updateInfo(
+                            dataType = dataType,
+                            state = OperationState.ERROR,
+                            log = out.toLineString()
+                        )
                         return@run ShellResult(code = -1, input = listOf(), out = out)
                     } else {
                         out.add(log { "Not exist and skip: $src" })
-                        t.updateInfo(dataType = dataType, state = OperationState.SKIP, log = out.toLineString())
+                        t.updateInfo(
+                            dataType = dataType,
+                            state = OperationState.SKIP,
+                            log = out.toLineString()
+                        )
                         return@run ShellResult(code = -2, input = listOf(), out = out)
                     }
                 }
@@ -351,7 +387,11 @@ class PackagesBackupUtil @Inject constructor(
                 }
             }
 
-            t.updateInfo(dataType = dataType, state = if (isSuccess) OperationState.DONE else OperationState.ERROR, log = out.toLineString())
+            t.updateInfo(
+                dataType = dataType,
+                state = if (isSuccess) OperationState.DONE else OperationState.ERROR,
+                log = out.toLineString()
+            )
         }
 
         ShellResult(code = if (isSuccess) 0 else -1, input = listOf(), out = out)
@@ -363,7 +403,8 @@ class PackagesBackupUtil @Inject constructor(
         val packageName = p.packageName
         val userId = p.userId
 
-        val packageInfo = rootService.getPackageInfoAsUser(packageName, PackageManager.GET_PERMISSIONS, userId)
+        val packageInfo =
+            rootService.getPackageInfoAsUser(packageName, PackageManager.GET_PERMISSIONS, userId)
         packageInfo?.apply {
             p.extraInfo.permissions = rootService.getPermissions(packageInfo = this)
         }
@@ -381,30 +422,68 @@ class PackagesBackupUtil @Inject constructor(
         val uid = p.extraInfo.uid
         val userId = p.userId
 
-        val ssaid = rootService.getPackageSsaidAsUser(packageName = packageName, uid = uid, userId = userId)
+        val ssaid =
+            rootService.getPackageSsaidAsUser(packageName = packageName, uid = uid, userId = userId)
         log { "Ssaid: $ssaid" }
         p.extraInfo.ssaid = ssaid
     }
 
-    suspend fun upload(client: CloudClient, p: PackageEntity, t: TaskDetailPackageEntity, dataType: DataType, srcDir: String, dstDir: String) = run {
+    suspend fun upload(
+        client: CloudClient,
+        p: PackageEntity,
+        t: TaskDetailPackageEntity,
+        dataType: DataType,
+        srcDir: String,
+        dstDir: String
+    ) = run {
         val ct = p.indexInfo.compressionType
         val src = packageRepository.getArchiveDst(dstDir = srcDir, dataType = dataType, ct = ct)
         t.updateInfo(dataType = dataType, state = OperationState.UPLOADING)
 
         var flag = true
         var progress = 0f
+        var speed = 0L
+        var lastBytes = 0L
+        var lastTime = System.currentTimeMillis()
+
         with(CoroutineScope(coroutineContext)) {
             launch {
                 while (flag) {
-                    t.updateInfo(dataType = dataType, content = "${(progress * 100).toInt()}%")
+                    val speedText = if (speed > 0) speed.formatToStorageSizePerSecond() else ""
+                    val content = if (speedText.isNotEmpty()) {
+                        "$speedText | ${(progress * 100).toInt()}%"
+                    } else {
+                        "${(progress * 100).toInt()}%"
+                    }
+                    t.updateInfo(dataType = dataType, content = content)
                     delay(500)
                 }
             }
         }
 
-        cloudRepository.upload(client = client, src = src, dstDir = dstDir, onUploading = { read, total -> progress = read.toFloat() / total }).apply {
+        cloudRepository.upload(
+            client = client,
+            src = src,
+            dstDir = dstDir,
+            onUploading = { read, total ->
+                progress = read.toFloat() / total
+                val currentTime = System.currentTimeMillis()
+                val timeDiff = currentTime - lastTime
+                if (timeDiff >= 500) {
+                    val bytesDiff = read - lastBytes
+                    speed = if (timeDiff > 0) (bytesDiff * 1000 / timeDiff) else 0L
+                    lastTime = currentTime
+                    lastBytes = read
+                }
+            }
+        ).apply {
             flag = false
-            t.updateInfo(dataType = dataType, state = if (isSuccess) OperationState.DONE else OperationState.ERROR, log = t.getLog(dataType) + "\n${outString}", content = "100%")
+            t.updateInfo(
+                dataType = dataType,
+                state = if (isSuccess) OperationState.DONE else OperationState.ERROR,
+                log = t.getLog(dataType) + "\n${outString}",
+                content = "100%"
+            )
         }
     }
 }

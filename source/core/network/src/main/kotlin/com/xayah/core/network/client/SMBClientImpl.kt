@@ -246,9 +246,10 @@ class SMBClientImpl(private val entity: CloudEntity, private val extra: SMBExtra
         }
     }
 
-    override fun removeDirectory(src: String) = withDiskShare { diskShare ->
+    override fun removeDirectory(src: String): Boolean = withDiskShare { diskShare ->
         log { "removeDirectory: $src" }
         diskShare.rmdir(src, true)
+        true
     }
 
     private fun clearEmptyDirectoriesRecursivelyInternal(src: String): Boolean {
@@ -278,10 +279,11 @@ class SMBClientImpl(private val entity: CloudEntity, private val extra: SMBExtra
         clearEmptyDirectoriesRecursivelyInternal(src)
     }
 
-    override fun deleteRecursively(src: String) = withDiskShare { diskShare ->
+    override fun deleteRecursively(src: String): Boolean = withDiskShare { diskShare ->
         if (diskShare.fileExists(src)) deleteFile(src)
         else if (diskShare.folderExists(src)) removeDirectory(src)
         else throw IOException("$src not found.")
+        true
     }
 
     /**

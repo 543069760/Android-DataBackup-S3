@@ -1,6 +1,7 @@
 package com.xayah.core.service.util
 
 import android.content.Context
+import com.xayah.core.model.util.formatToStorageSizePerSecond
 import com.xayah.core.common.util.toLineString
 import com.xayah.core.data.repository.CloudRepository
 import com.xayah.core.data.repository.MediaRepository
@@ -47,7 +48,8 @@ class MediumBackupUtil @Inject constructor(
     private fun MediaEntity.getDataBytes() = mediaInfo.dataBytes
 
     private fun MediaEntity.setDataBytes(sizeBytes: Long) = run { mediaInfo.dataBytes = sizeBytes }
-    private fun MediaEntity.setDisplayBytes(sizeBytes: Long) = run { mediaInfo.displayBytes = sizeBytes }
+    private fun MediaEntity.setDisplayBytes(sizeBytes: Long) =
+        run { mediaInfo.displayBytes = sizeBytes }
 
     private fun TaskDetailMediaEntity.getLog() = mediaInfo.log
 
@@ -66,7 +68,12 @@ class MediumBackupUtil @Inject constructor(
         taskDao.upsert(this)
     }
 
-    suspend fun backupMedia(m: MediaEntity, t: TaskDetailMediaEntity, r: MediaEntity?, dstDir: String): ShellResult = run {
+    suspend fun backupMedia(
+        m: MediaEntity,
+        t: TaskDetailMediaEntity,
+        r: MediaEntity?,
+        dstDir: String
+    ): ShellResult = run {
         log { "Backing up ${DataType.MEDIA_MEDIA.type}..." }
 
         val name = m.name
@@ -115,30 +122,68 @@ class MediumBackupUtil @Inject constructor(
             }
         }
 
-        t.updateInfo(state = if (isSuccess) OperationState.DONE else OperationState.ERROR, log = out.toLineString())
+        t.updateInfo(
+            state = if (isSuccess) OperationState.DONE else OperationState.ERROR,
+            log = out.toLineString()
+        )
 
         ShellResult(code = if (isSuccess) 0 else -1, input = listOf(), out = out)
     }
 
-    suspend fun upload(client: CloudClient, m: MediaEntity, t: TaskDetailMediaEntity, srcDir: String, dstDir: String) = run {
+    suspend fun upload(
+        client: CloudClient,
+        m: MediaEntity,
+        t: TaskDetailMediaEntity,
+        srcDir: String,
+        dstDir: String
+    ) = run {
         val ct = m.indexInfo.compressionType
         val src = mediaRepository.getArchiveDst(dstDir = srcDir, ct = ct)
         t.updateInfo(state = OperationState.UPLOADING)
 
         var flag = true
         var progress = 0f
+        var speed = 0L
+        var lastBytes = 0L
+        var lastTime = System.currentTimeMillis()
+
         with(CoroutineScope(coroutineContext)) {
             launch {
                 while (flag) {
-                    t.updateInfo(content = "${(progress * 100).toInt()}%")
+                    val speedText = if (speed > 0) speed.formatToStorageSizePerSecond() else ""
+                    val content = if (speedText.isNotEmpty()) {
+                        "$speedText | ${(progress * 100).toInt()}%"
+                    } else {
+                        "${(progress * 100).toInt()}%"
+                    }
+                    t.updateInfo(content = content)
                     delay(500)
                 }
             }
         }
 
-        cloudRepository.upload(client = client, src = src, dstDir = dstDir, onUploading = { read, total -> progress = read.toFloat() / total }).apply {
+        cloudRepository.upload(
+            client = client,
+            src = src,
+            dstDir = dstDir,
+            onUploading = { read, total ->
+                progress = read.toFloat() / total
+                val currentTime = System.currentTimeMillis()
+                val timeDiff = currentTime - lastTime
+                if (timeDiff >= 500) {
+                    val bytesDiff = read - lastBytes
+                    speed = if (timeDiff > 0) (bytesDiff * 1000 / timeDiff) else 0L
+                    lastTime = currentTime
+                    lastBytes = read
+                }
+            }
+        ).apply {
             flag = false
-            t.updateInfo(state = if (isSuccess) OperationState.DONE else OperationState.ERROR, log = t.getLog() + "\n${outString}", content = "100%")
+            t.updateInfo(
+                state = if (isSuccess) OperationState.DONE else OperationState.ERROR,
+                log = t.getLog() + "\n${outString}",
+                content = "100%"
+            )
         }
     }
 }

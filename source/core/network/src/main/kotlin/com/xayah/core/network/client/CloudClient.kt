@@ -10,6 +10,7 @@ import com.xayah.core.model.database.WebDAVExtra
 import com.xayah.core.network.util.getExtraEntity
 import com.xayah.core.rootservice.parcelables.PathParcelable
 import com.xayah.libpickyou.parcelables.DirChildrenParcelable
+import com.xayah.core.model.database.S3Extra
 
 interface CloudClient {
     fun connect()
@@ -20,9 +21,9 @@ interface CloudClient {
     fun upload(src: String, dst: String, onUploading: (read: Long, total: Long) -> Unit)
     fun download(src: String, dst: String, onDownloading: (written: Long, total: Long) -> Unit)
     fun deleteFile(src: String)
-    fun removeDirectory(src: String)
+    fun removeDirectory(src: String): Boolean
     fun clearEmptyDirectoriesRecursively(src: String)
-    fun deleteRecursively(src: String)
+    fun deleteRecursively(src: String): Boolean
     fun listFiles(src: String): DirChildrenParcelable
     fun walkFileTree(src: String): List<PathParcelable>
     fun exists(src: String): Boolean
@@ -50,5 +51,10 @@ fun CloudEntity.getCloud() = when (this.type) {
     CloudType.SFTP -> {
         val extra = getExtraEntity<SFTPExtra>()!!
         SFTPClientImpl(this, extra)
+    }
+
+    CloudType.S3 -> {
+        val extra = getExtraEntity<S3Extra>()!!
+        S3ClientImpl(this, extra)
     }
 }

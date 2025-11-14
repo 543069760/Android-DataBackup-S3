@@ -94,6 +94,7 @@ enum class CloudType(val title: String) {
     WEBDAV("WebDAV"),
     SMB("SMB / CIFS"),
     SFTP("SFTP"),
+    S3("Amazon S3"),  // 新增
 }
 
 enum class SmbVersion(val text: String) {

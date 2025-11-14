@@ -420,4 +420,10 @@
     <string name="notification_desc">This is needed to post necessary notifications</string>
     <string name="permission_is_denied">Permission is denied</string>
     <string name="root_denied_msg">Please check your root manager and restart app</string>
+    <string name="s3_setup">S3 Setup</string>
+    <string name="region">Region</string>
+    <string name="access_key_id">Access Key ID</string>
+    <string name="secret_access_key">Secret Access Key</string>
+    <string name="bucket">Bucket</string>
+    <string name="endpoint">Endpoint</string>
 </resources>

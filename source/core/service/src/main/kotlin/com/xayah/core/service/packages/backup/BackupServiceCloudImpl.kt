@@ -1,5 +1,6 @@
 package com.xayah.core.service.packages.backup
 
+import com.xayah.core.model.util.formatToStorageSizePerSecond
 import com.xayah.core.data.repository.CloudRepository
 import com.xayah.core.data.repository.PackageRepository
 import com.xayah.core.data.repository.TaskRepository
@@ -99,58 +100,161 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
         mCloudRepo.upload(client = mClient, src = path, dstDir = getRemoteAppDir(archivesRelativeDir))
     }
 
+    // 实现清理失败备份的逻辑
+    override suspend fun onCleanupFailedBackup(archivesRelativeDir: String) {
+        val remoteAppDir = getRemoteAppDir(archivesRelativeDir)
+        log { "Cleaning up failed backup at: $remoteAppDir" }
+        runCatching {
+            mClient.deleteRecursively(remoteAppDir)
+        }.onSuccess {
+            log { "Successfully cleaned up: $remoteAppDir" }
+        }.onFailure { e ->
+            log { "Failed to cleanup: ${e.message}" }
+        }
+    }
+
     override suspend fun onItselfSaved(path: String, entity: ProcessingInfoEntity) {
         entity.update(state = OperationState.UPLOADING)
         var flag = true
         var progress = 0f
+        var speed = 0L
+        var lastBytes = 0L
+        var lastTime = System.currentTimeMillis()
+
         with(CoroutineScope(coroutineContext)) {
             launch {
                 while (flag) {
-                    entity.update(content = "${(progress * 100).toInt()}%")
+                    val speedText = if (speed > 0) speed.formatToStorageSizePerSecond() else ""
+                    val content = if (speedText.isNotEmpty()) {
+                        "$speedText | ${(progress * 100).toInt()}%"
+                    } else {
+                        "${(progress * 100).toInt()}%"
+                    }
+                    entity.update(content = content)
                     delay(500)
                 }
             }
         }
-        mCloudRepo.upload(client = mClient, src = path, dstDir = mRemotePath, onUploading = { read, total -> progress = read.toFloat() / total }).apply {
-            entity.update(state = if (isSuccess) OperationState.DONE else OperationState.ERROR, log = if (isSuccess) null else outString, content = "100%")
+
+        mCloudRepo.upload(
+            client = mClient,
+            src = path,
+            dstDir = mRemotePath,
+            onUploading = { read, total ->
+                progress = read.toFloat() / total
+                val currentTime = System.currentTimeMillis()
+                val timeDiff = currentTime - lastTime
+                if (timeDiff >= 500) {
+                    val bytesDiff = read - lastBytes
+                    speed = if (timeDiff > 0) (bytesDiff * 1000 / timeDiff) else 0L
+                    lastTime = currentTime
+                    lastBytes = read
+                }
+            }
+        ).apply {
+            flag = false
+            entity.update(
+                state = if (isSuccess) OperationState.DONE else OperationState.ERROR,
+                log = if (isSuccess) null else outString,
+                content = "100%"
+            )
         }
-        flag = false
     }
 
     override suspend fun onIconsSaved(path: String, entity: ProcessingInfoEntity) {
         entity.update(state = OperationState.UPLOADING)
         var flag = true
         var progress = 0f
+        var speed = 0L
+        var lastBytes = 0L
+        var lastTime = System.currentTimeMillis()
+
         with(CoroutineScope(coroutineContext)) {
             launch {
                 while (flag) {
-                    entity.update(content = "${(progress * 100).toInt()}%")
+                    val speedText = if (speed > 0) speed.formatToStorageSizePerSecond() else ""
+                    val content = if (speedText.isNotEmpty()) {
+                        "$speedText | ${(progress * 100).toInt()}%"
+                    } else {
+                        "${(progress * 100).toInt()}%"
+                    }
+                    entity.update(content = content)
                     delay(500)
                 }
             }
         }
-        mCloudRepo.upload(client = mClient, src = path, dstDir = mRemoteConfigsDir, onUploading = { read, total -> progress = read.toFloat() / total }).apply {
-            entity.update(state = if (isSuccess) OperationState.DONE else OperationState.ERROR, log = if (isSuccess) null else outString, content = "100%")
+
+        mCloudRepo.upload(
+            client = mClient,
+            src = path,
+            dstDir = mRemoteConfigsDir,
+            onUploading = { read, total ->
+                progress = read.toFloat() / total
+                val currentTime = System.currentTimeMillis()
+                val timeDiff = currentTime - lastTime
+                if (timeDiff >= 500) {
+                    val bytesDiff = read - lastBytes
+                    speed = if (timeDiff > 0) (bytesDiff * 1000 / timeDiff) else 0L
+                    lastTime = currentTime
+                    lastBytes = read
+                }
+            }
+        ).apply {
+            flag = false
+            entity.update(
+                state = if (isSuccess) OperationState.DONE else OperationState.ERROR,
+                log = if (isSuccess) null else outString,
+                content = "100%"
+            )
         }
-        flag = false
     }
 
     override suspend fun onConfigsSaved(path: String, entity: ProcessingInfoEntity) {
         entity.update(state = OperationState.UPLOADING)
         var flag = true
         var progress = 0f
+        var speed = 0L
+        var lastBytes = 0L
+        var lastTime = System.currentTimeMillis()
+
         with(CoroutineScope(coroutineContext)) {
             launch {
                 while (flag) {
-                    entity.update(content = "${(progress * 100).toInt()}%")
+                    val speedText = if (speed > 0) speed.formatToStorageSizePerSecond() else ""
+                    val content = if (speedText.isNotEmpty()) {
+                        "$speedText | ${(progress * 100).toInt()}%"
+                    } else {
+                        "${(progress * 100).toInt()}%"
+                    }
+                    entity.update(content = content)
                     delay(500)
                 }
             }
         }
-        mCloudRepo.upload(client = mClient, src = path, dstDir = mRemoteConfigsDir, onUploading = { read, total -> progress = read.toFloat() / total }).apply {
-            entity.update(state = if (isSuccess) OperationState.DONE else OperationState.ERROR, log = if (isSuccess) null else outString, content = "100%")
+
+        mCloudRepo.upload(
+            client = mClient,
+            src = path,
+            dstDir = mRemoteConfigsDir,
+            onUploading = { read, total ->
+                progress = read.toFloat() / total
+                val currentTime = System.currentTimeMillis()
+                val timeDiff = currentTime - lastTime
+                if (timeDiff >= 500) {
+                    val bytesDiff = read - lastBytes
+                    speed = if (timeDiff > 0) (bytesDiff * 1000 / timeDiff) else 0L
+                    lastTime = currentTime
+                    lastBytes = read
+                }
+            }
+        ).apply {
+            flag = false
+            entity.update(
+                state = if (isSuccess) OperationState.DONE else OperationState.ERROR,
+                log = if (isSuccess) null else outString,
+                content = "100%"
+            )
         }
-        flag = false
     }
 
     override suspend fun clear() {

@@ -46,4 +46,13 @@
     <item name="ic_rounded_person" type="drawable"/>
     <item name="ic_rounded_deployed_code" type="drawable"/>
     <item name="ic_rounded_badge" type="drawable"/>
+    <item name="ic_rounded_public" type="drawable"/>  <!-- 新增 -->
+    <item name="ic_rounded_folder" type="drawable"/>  <!-- 新增 -->
+
+    <item name="s3_setup" type="string"/>
+    <item name="region" type="string"/>
+    <item name="access_key_id" type="string"/>
+    <item name="secret_access_key" type="string"/>
+    <item name="bucket" type="string"/>
+    <item name="endpoint" type="string"/>
 </resources>

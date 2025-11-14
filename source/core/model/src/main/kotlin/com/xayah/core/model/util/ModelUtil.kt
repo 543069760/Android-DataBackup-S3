@@ -42,6 +42,26 @@ fun Double.formatSize(unitValue: Int = 1024): String = run {
     if (size == 0.0) "0.00 $unit" else "${DecimalFormat("#.00").format(size)} $unit"
 }
 
+// 新增: 格式化速度显示
+fun Long.formatToStorageSizePerSecond(unitValue: Int = 1024): String = run {
+    var unit = "Bytes/s"
+    var size = this.toDouble()
+    val gb = unitValue.toDouble().pow(3)
+    val mb = unitValue.toDouble().pow(2)
+    val kb = unitValue.toDouble()
+    if (this > gb) {
+        size = this / gb
+        unit = "GB/s"
+    } else if (this > mb) {
+        size = this / mb
+        unit = "MB/s"
+    } else if (this > kb) {
+        size = this / kb
+        unit = "KB/s"
+    }
+    if (size == 0.0) "0.00 $unit" else "${DecimalFormat("#.00").format(size)} $unit"
+}
+
 fun CompressionType.Companion.of(name: String?): CompressionType =
     runCatching { CompressionType.valueOf(name!!.uppercase()) }.getOrDefault(CompressionType.ZSTD)
 

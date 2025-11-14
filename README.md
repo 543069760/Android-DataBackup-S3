@@ -43,6 +43,11 @@ See [documentation](https://DataBackupOfficial.github.io).
 * :sunny: **Easy**
 
 * :rose: **...**
+## Screenshot-S3
+<div align="center">
+	<img src="./fastlane/metadata/android/en-US/images/phoneScreenshotss3/20251112233930_19_20.jpg" width="275px"><img src="./fastlane/metadata/android/en-US/images/phoneScreenshotss3/20251112233931_20_20.jpg" width="275px"><img src="./fastlane/metadata/android/en-US/images/phoneScreenshotss3/20251112233931_21_20.jpg" width="275px">
+	<img src="./fastlane/metadata/android/en-US/images/phoneScreenshotss3/20251112233932_22_20.jpg" width="275px"><img src="./fastlane/metadata/android/en-US/images/phoneScreenshotss3/20251112233933_23_20.jpg" width="275px"><img src="./fastlane/metadata/android/en-US/images/phoneScreenshotss3/20251112234045_24_20.jpg" width="275px">
+</div>
 
 ## Screenshot
 <div align="center">
@@ -51,13 +56,7 @@ See [documentation](https://DataBackupOfficial.github.io).
 </div>
 
 ## Download
-[<img src="https://gitlab.com/IzzyOnDroid/repo/-/raw/master/assets/IzzyOnDroid.png"
-     alt="Get it on IzzyOnDroid"
-     height="80">](https://apt.izzysoft.de/fdroid/index/apk/com.xayah.databackup.foss)[<img src="https://fdroid.gitlab.io/artwork/badge/get-it-on.png"
-    alt="Get it on F-Droid"
-    height="80">](https://f-droid.org/zh_Hans/packages/com.xayah.databackup.foss/)
-
-or get the APK from the [Releases](https://github.com/XayahSuSuSu/Android-DataBackup/releases/latest).
+get the APK from the [Releases](https://github.com/543069760/Android-DataBackup-S3/tags).
 
 ## Translation
 [<img src="https://hosted.weblate.org/widget/databackup/main/open-graph.png"

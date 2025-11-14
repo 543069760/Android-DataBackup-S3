@@ -19,6 +19,7 @@ val CloudType.icon: ImageVector
             CloudType.WEBDAV -> Icons.Rounded.Language
             CloudType.SMB -> Icons.Rounded.Storage
             CloudType.SFTP -> Icons.Rounded.Lan
+            CloudType.S3 -> Icons.Rounded.Storage
         }
     }
 

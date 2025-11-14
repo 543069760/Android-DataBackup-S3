@@ -14,6 +14,7 @@ import com.xayah.core.model.database.FTPExtra
 import com.xayah.core.model.database.SFTPExtra
 import com.xayah.core.model.database.SMBExtra
 import com.xayah.core.model.database.WebDAVExtra
+import com.xayah.core.model.database.S3Extra
 import com.xayah.core.network.client.getCloud
 import com.xayah.core.ui.material3.SnackbarDuration
 import com.xayah.core.ui.material3.SnackbarType
@@ -112,6 +113,37 @@ class IndexViewModel @Inject constructor(
                 url = url,
                 username = username,
                 password = password,
+                extra = extra,
+                remote = remote,
+            )
+        )
+    }
+
+    suspend fun updateS3Entity(
+        name: String,
+        remote: String,
+        region: String,
+        accessKeyId: String,
+        secretAccessKey: String,
+        bucket: String,
+        endpoint: String
+    ) {
+        val extra = GsonUtil().toJson(
+            S3Extra(
+                region = region,
+                accessKeyId = accessKeyId,
+                secretAccessKey = secretAccessKey,
+                bucket = bucket,
+                endpoint = endpoint
+            )
+        )
+        emitIntent(
+            IndexUiIntent.UpdateEntity(
+                name = name,
+                type = CloudType.S3,
+                url = bucket,
+                username = accessKeyId,
+                password = secretAccessKey,
                 extra = extra,
                 remote = remote,
             )

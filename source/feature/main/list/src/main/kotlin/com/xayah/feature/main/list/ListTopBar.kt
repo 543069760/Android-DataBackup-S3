@@ -120,12 +120,15 @@ internal fun ListTopBar(
 @Composable
 private fun UserTabs(selected: Int, userList: List<UserInfo>, usersMap: Map<Int, Long>, onTabClick: (index: Int) -> Unit) {
     if (userList.isNotEmpty()) {
+        // 添加边界检查,确保 selected 索引有效
+        val safeSelected = selected.coerceIn(0, userList.size - 1)
+
         PrimaryScrollableTabRow(
-            selectedTabIndex = selected,
+            selectedTabIndex = safeSelected,
             edgePadding = SizeTokens.Level0,
             indicator = @Composable {
                 TabRowDefaults.PrimaryIndicator(
-                    Modifier.tabIndicatorOffset(selected, matchContentSize = true),
+                    Modifier.tabIndicatorOffset(safeSelected, matchContentSize = true),
                     shape = CircleShape
                 )
             },
@@ -135,7 +138,7 @@ private fun UserTabs(selected: Int, userList: List<UserInfo>, usersMap: Map<Int,
         ) {
             userList.forEachIndexed { index, user ->
                 Tab(
-                    selected = selected == index,
+                    selected = safeSelected == index,
                     onClick = {
                         onTabClick(index)
                     },

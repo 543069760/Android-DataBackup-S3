@@ -134,7 +134,9 @@ class ListDataRepo @Inject constructor(
         userList,
         userMap,
     ) { s, t, sQuery, sFSheet, sIndex, sType, iUpdating, lIds, sDISheet, filters, uIndex, uList, uMap ->
-        ListData.Apps(s, t, sQuery, sFSheet, sIndex, sType, iUpdating, lIds, sDISheet, filters, uIndex, uList, uMap)
+        // 添加边界检查:如果 userIndex 超出范围,重置为 0
+        val safeUserIndex = if (uIndex >= uList.size) 0 else uIndex
+        ListData.Apps(s, t, sQuery, sFSheet, sIndex, sType, iUpdating, lIds, sDISheet, filters, safeUserIndex, uList, uMap)
     }
 
     private fun getFileListData(): Flow<ListData.Files> = combine(

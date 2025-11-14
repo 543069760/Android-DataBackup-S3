@@ -36,9 +36,9 @@ class FTPClientImpl(private val entity: CloudEntity, private val extra: FTPExtra
         msg()
     }
 
-    private fun withClient(block: (client: FTPClient) -> Unit) = run {
+    private fun <T> withClient(block: (client: FTPClient) -> T): T {
         if (client == null) throw NullPointerException("Client is null.")
-        block(client!!)
+        return block(client!!)
     }
 
     override fun connect() {
@@ -121,9 +121,10 @@ class FTPClientImpl(private val entity: CloudEntity, private val extra: FTPExtra
         if (client.deleteFile(src).not()) throw IOException("Failed to delete file: $src.")
     }
 
-    override fun removeDirectory(src: String) = withClient { client ->
+    override fun removeDirectory(src: String): Boolean = withClient { client ->
         log { "removeDirectory: $src" }
         if (client.removeDirectory(src).not()) throw IOException("Failed to remove dir: $src.")
+        true
     }
 
     override fun clearEmptyDirectoriesRecursively(src: String) = withClient { client ->
@@ -172,7 +173,7 @@ class FTPClientImpl(private val entity: CloudEntity, private val extra: FTPExtra
      * Actually this is not a recursive function,
      * just keep this name to make it easier to understand.
      */
-    override fun deleteRecursively(src: String) = withClient { client ->
+    override fun deleteRecursively(src: String): Boolean = withClient { client ->
         val srcFile = listFile(src)
         if (srcFile.isDirectory.not()) {
             deleteFile(src)
@@ -180,7 +181,6 @@ class FTPClientImpl(private val entity: CloudEntity, private val extra: FTPExtra
             val dirs = mutableListOf(src)
             val paths = mutableListOf(src)
 
-            // Delete files and append all empty dirs.
             while (paths.isNotEmpty()) {
                 val dir = paths.first()
                 val files = client.listFiles(dir)
@@ -196,9 +196,9 @@ class FTPClientImpl(private val entity: CloudEntity, private val extra: FTPExtra
                 paths.removeFirstOrNull()
             }
 
-            // Remove reversed empty dirs.
             for (path in dirs.reversed()) removeDirectory(path)
         }
+        true
     }
 
     override fun listFiles(src: String): DirChildrenParcelable {

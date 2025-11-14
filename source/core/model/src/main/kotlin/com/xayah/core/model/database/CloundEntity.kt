@@ -29,6 +29,14 @@ data class WebDAVExtra(
     val insecure: Boolean,
 )
 
+data class S3Extra(
+    val region: String,           // 如 "ap-shanghai"
+    val accessKeyId: String,      // 您示例中的 accessKey
+    val secretAccessKey: String,  // 您示例中的 secretKey
+    val bucket: String,           // 如 "zctestlan-1251956900"
+    val endpoint: String = "",    // 如 "cos.ap-shanghai.myqcloud.com"
+)
+
 @Entity
 data class CloudEntity(
     @PrimaryKey var name: String,

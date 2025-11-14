@@ -37,9 +37,9 @@ class WebDAVClientImpl(private val entity: CloudEntity, private val extra: WebDA
 
     private fun getPath(path: String) = "${entity.host.trimEnd('/')}/${path.trimStart('/')}"
 
-    private fun withClient(block: (client: OkHttpSardine) -> Unit) = run {
+    private fun <T> withClient(block: (client: OkHttpSardine) -> T): T {
         if (client == null) throw NullPointerException("Client is null.")
-        block(client!!)
+        return block(client!!)
     }
 
     override fun connect() {
@@ -121,9 +121,10 @@ class WebDAVClientImpl(private val entity: CloudEntity, private val extra: WebDA
         client.delete(getPath(src))
     }
 
-    override fun removeDirectory(src: String) = withClient { client ->
+    override fun removeDirectory(src: String): Boolean = withClient { client ->
         log { "removeDirectory: ${getPath(src)}" }
         client.delete(getPath(src))
+        true
     }
 
     private fun clearEmptyDirectoriesRecursivelyInternal(src: String): Boolean {
@@ -154,7 +155,10 @@ class WebDAVClientImpl(private val entity: CloudEntity, private val extra: WebDA
         clearEmptyDirectoriesRecursivelyInternal(getPath(src))
     }
 
-    override fun deleteRecursively(src: String) = removeDirectory(src)
+    override fun deleteRecursively(src: String): Boolean {
+        removeDirectory(src)
+        return true
+    }
 
     override fun listFiles(src: String): DirChildrenParcelable {
         val files = mutableListOf<FileParcelable>()

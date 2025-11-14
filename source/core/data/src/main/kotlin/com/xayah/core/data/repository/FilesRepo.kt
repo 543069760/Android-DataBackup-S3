@@ -286,6 +286,21 @@ class FilesRepo @Inject constructor(
         filesDao.upsert(file)
     }
 
+    // 添加云端文件大小计算
+    suspend fun calculateCloudFileArchiveSize(cloudName: String, file: MediaEntity) = runCatching {
+        var size = 0L
+        cloudRepo.withClient(cloudName) { client, entity ->
+            val remote = entity.remote
+            val remoteFilesDir = pathUtil.getCloudRemoteFilesDir(remote)
+            val archivePath = getArchiveSrc("${remoteFilesDir}/${file.archivesRelativeDir}", file.indexInfo.compressionType)
+            if (client.exists(archivePath)) {
+                size = client.size(archivePath)
+            }
+        }
+        file.mediaInfo.displayBytes = size
+        filesDao.upsert(file)
+    }.withLog()
+
     private fun getArchiveSrc(dstDir: String, ct: CompressionType) = "${dstDir}/${DataType.MEDIA_MEDIA.type}.${ct.suffix}"
 
     suspend fun calculateLocalFileArchiveSize(file: MediaEntity) {
@@ -365,8 +380,8 @@ class FilesRepo @Inject constructor(
             val remoteFilesDir = pathUtil.getCloudRemoteFilesDir(remote)
             val src = "${remoteFilesDir}/${file.archivesRelativeDir}"
             if (client.exists(src)) {
-                client.deleteRecursively(src)
-                if (client.exists(src).not()) {
+                val isDeleted = client.deleteRecursively(src)
+                if (isDeleted) {
                     filesDao.delete(file.id)
                 }
             }

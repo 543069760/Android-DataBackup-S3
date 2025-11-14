@@ -94,7 +94,11 @@ class DetailsViewModel @Inject constructor(
 
                         OpType.RESTORE -> {
                             isRefreshing.emit(true)
-                            appsRepo.calculateLocalAppArchiveSize(state.app)
+                            if (state.app.indexInfo.cloud.isNotEmpty()) {
+                                appsRepo.calculateCloudAppArchiveSize(state.app.indexInfo.cloud, state.app)
+                            } else {
+                                appsRepo.calculateLocalAppArchiveSize(state.app)
+                            }
                             isRefreshing.emit(false)
                         }
                     }
@@ -111,7 +115,11 @@ class DetailsViewModel @Inject constructor(
 
                         OpType.RESTORE -> {
                             isRefreshing.emit(true)
-                            filesRepo.calculateLocalFileArchiveSize(state.file)
+                            if (state.file.indexInfo.cloud.isNotEmpty()) {
+                                filesRepo.calculateCloudFileArchiveSize(state.file.indexInfo.cloud, state.file)
+                            } else {
+                                filesRepo.calculateLocalFileArchiveSize(state.file)
+                            }
                             isRefreshing.emit(false)
                         }
                     }
@@ -243,7 +251,15 @@ class DetailsViewModel @Inject constructor(
                 is Success.App -> {
                     val state = uiState.value.castTo<Success.App>()
                     val app = state.app
-                    appsRepo.deleteApp(app.indexInfo.cloud, app)
+                    when (app.indexInfo.opType) {
+                        OpType.BACKUP -> {
+                            appsRepo.delete(app.id)
+                        }
+
+                        OpType.RESTORE -> {
+                            appsRepo.deleteApp(app.indexInfo.cloud, app)
+                        }
+                    }
                 }
 
                 is Success.File -> {

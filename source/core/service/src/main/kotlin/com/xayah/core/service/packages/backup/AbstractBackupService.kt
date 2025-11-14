@@ -105,6 +105,9 @@ internal abstract class AbstractBackupService : AbstractPackagesService() {
     protected open suspend fun onIconsSaved(path: String, entity: ProcessingInfoEntity) {}
     protected open suspend fun clear() {}
 
+    // 新增抽象方法:清理失败的备份
+    protected open suspend fun onCleanupFailedBackup(archivesRelativeDir: String) {}
+
     protected abstract val mPackagesBackupUtil: PackagesBackupUtil
 
     private lateinit var necessaryInfo: NecessaryInfo
@@ -112,11 +115,6 @@ internal abstract class AbstractBackupService : AbstractPackagesService() {
     override suspend fun onPreprocessing(entity: ProcessingInfoEntity) {
         when (entity.infoType) {
             ProcessingInfoType.NECESSARY_PREPARATIONS -> {
-                /**
-                 * Somehow the input methods and accessibility services
-                 * will be changed after backing up on some devices,
-                 * so we restore them manually.
-                 */
                 necessaryInfo = NecessaryInfo(inputMethods = PreparationUtil.getInputMethods().outString.trim(), accessibilityServices = PreparationUtil.getAccessibilityServices().outString.trim())
                 log { "InputMethods: ${necessaryInfo.inputMethods}." }
                 log { "AccessibilityServices: ${necessaryInfo.accessibilityServices}." }
@@ -134,7 +132,6 @@ internal abstract class AbstractBackupService : AbstractPackagesService() {
     }
 
     override suspend fun onProcessing() {
-        // createTargetDirs() before readStatFs().
         mTaskEntity.update(rawBytes = mTaskRepo.getRawBytes(TaskType.PACKAGE), availableBytes = mTaskRepo.getAvailableBytes(OpType.BACKUP), totalBytes = mTaskRepo.getTotalBytes(OpType.BACKUP), totalCount = mPkgEntities.size)
         log { "Task count: ${mPkgEntities.size}." }
 
@@ -171,7 +168,6 @@ internal abstract class AbstractBackupService : AbstractPackagesService() {
                     mPackagesBackupUtil.backupSsaid(p = p)
 
                     if (pkg.isSuccess) {
-                        // Save config
                         p.extraInfo.lastBackupTime = DateUtil.getTimestamp()
                         val id = restoreEntity?.id ?: 0
                         restoreEntity = p.copy(
@@ -187,6 +183,13 @@ internal abstract class AbstractBackupService : AbstractPackagesService() {
                         pkg.update(packageEntity = p)
                         mTaskEntity.update(successCount = mTaskEntity.successCount + 1)
                     } else {
+                        // 备份失败,清理已上传的文件
+                        log { "Backup failed for ${p.packageName}, cleaning up remote files..." }
+                        runCatching {
+                            onCleanupFailedBackup(archivesRelativeDir = p.archivesRelativeDir)
+                        }.onFailure { e ->
+                            log { "Failed to cleanup remote files: ${e.message}" }
+                        }
                         mTaskEntity.update(failureCount = mTaskEntity.failureCount + 1)
                     }
                 } else {

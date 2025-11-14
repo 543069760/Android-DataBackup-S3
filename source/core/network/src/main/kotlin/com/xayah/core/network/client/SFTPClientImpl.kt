@@ -146,9 +146,10 @@ class SFTPClientImpl(private val entity: CloudEntity, private val extra: SFTPExt
         withSFTPClient { it.rm(src) }
     }
 
-    override fun removeDirectory(src: String) {
+    override fun removeDirectory(src: String): Boolean {
         log { "removeDirectory: $src" }
         withSFTPClient { it.rmdir(src) }
+        return true
     }
 
     override fun clearEmptyDirectoriesRecursively(src: String) = withSFTPClient { client ->
@@ -174,7 +175,7 @@ class SFTPClientImpl(private val entity: CloudEntity, private val extra: SFTPExt
         for (path in emptyDirs.reversed()) removeDirectory(path)
     }
 
-    override fun deleteRecursively(src: String) {
+    override fun deleteRecursively(src: String): Boolean {
         withSFTPClient {
             for (item in it.ls(src)) {
                 if (item.isDirectory) {
@@ -186,6 +187,7 @@ class SFTPClientImpl(private val entity: CloudEntity, private val extra: SFTPExt
 
             removeDirectory(src)
         }
+        return true
     }
 
     override fun listFiles(src: String): DirChildrenParcelable {

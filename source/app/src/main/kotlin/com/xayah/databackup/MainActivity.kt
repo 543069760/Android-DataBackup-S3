@@ -22,6 +22,7 @@ import com.xayah.feature.main.cloud.add.PageFTPSetup
 import com.xayah.feature.main.cloud.add.PageSFTPSetup
 import com.xayah.feature.main.cloud.add.PageSMBSetup
 import com.xayah.feature.main.cloud.add.PageWebDAVSetup
+import com.xayah.feature.main.cloud.add.PageS3Setup
 import com.xayah.feature.main.configurations.PageConfigurations
 import com.xayah.feature.main.dashboard.PageDashboard
 import com.xayah.feature.main.details.DetailsRoute
@@ -94,6 +95,9 @@ class MainActivity : AppCompatActivity() {
                         }
                         composable(MainRoutes.SFTPSetup.route) {
                             PageSFTPSetup()
+                        }
+                        composable(MainRoutes.S3Setup.route) {  // 新增路由注册
+                            PageS3Setup()
                         }
                         composable(MainRoutes.List.route) {
                             ListRoute()
