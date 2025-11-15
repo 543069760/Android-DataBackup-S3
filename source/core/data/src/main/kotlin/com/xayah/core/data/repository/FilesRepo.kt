@@ -379,11 +379,26 @@ class FilesRepo @Inject constructor(
             val remote = entity.remote
             val remoteFilesDir = pathUtil.getCloudRemoteFilesDir(remote)
             val src = "${remoteFilesDir}/${file.archivesRelativeDir}"
-            if (client.exists(src)) {
-                val isDeleted = client.deleteRecursively(src)
-                if (isDeleted) {
+
+            // 添加日志
+            log { "Deleting cloud file: $src" }
+
+            // 直接调用 deleteRecursively,不检查 exists
+            val isDeleted = client.deleteRecursively(src)
+
+            log { "Delete result: $isDeleted" }
+
+            if (isDeleted) {
+                // 使用 try-catch 包裹数据库操作,防止闪退
+                try {
                     filesDao.delete(file.id)
+                    log { "Database record deleted for file id: ${file.id}" }
+                } catch (e: Exception) {
+                    log { "Failed to delete from database: ${e.message}" }
+                    // 即使数据库删除失败,也不抛出异常,因为 S3 文件已经删除
                 }
+            } else {
+                log { "Failed to delete file from S3" }
             }
         }
     }.withLog()

@@ -11,6 +11,7 @@ import aws.smithy.kotlin.runtime.content.writeToFile
 import aws.smithy.kotlin.runtime.content.asByteStream
 import com.xayah.core.model.database.CloudEntity
 import com.xayah.core.model.database.S3Extra
+import com.xayah.core.model.database.S3Protocol
 import com.xayah.core.network.R
 import com.xayah.core.network.util.getExtraEntity
 import com.xayah.core.rootservice.parcelables.PathParcelable
@@ -58,7 +59,12 @@ class S3ClientImpl(
                 }
             }
             if (extra.endpoint.isNotEmpty()) {
-                endpointUrl = Url.parse("https://${extra.endpoint}")
+                // 根据协议配置构建endpoint URL
+                val scheme = when (extra.protocol) {
+                    S3Protocol.HTTP -> "http"
+                    S3Protocol.HTTPS -> "https"
+                }
+                endpointUrl = Url.parse("$scheme://${extra.endpoint}")
             }
         }
     }
@@ -100,6 +106,18 @@ class S3ClientImpl(
         }
     }
 
+    private fun calculatePartSize(fileSize: Long): Long {
+        val maxParts = 10000L
+        val minPartSize = 5L * 1024 * 1024  // 5MB
+
+        val calculatedSize = fileSize / maxParts
+
+        return when {
+            calculatedSize < minPartSize -> minPartSize
+            else -> calculatedSize
+        }
+    }
+
     override fun upload(src: String, dst: String, onUploading: (read: Long, total: Long) -> Unit) {
         runBlocking {
             val name = PathUtil.getFileName(src)
@@ -109,6 +127,9 @@ class S3ClientImpl(
             val srcFile = File(src)
             val srcFileSize = srcFile.length()
 
+            // 使用动态计算的分块大小
+            val partSize = calculatePartSize(srcFileSize).toInt()
+
             val createMultipartUploadResponse = s3Client?.createMultipartUpload(
                 CreateMultipartUploadRequest {
                     bucket = extra.bucket
@@ -116,8 +137,7 @@ class S3ClientImpl(
                 }
             )
 
-            val PART_SIZE = 5 * 1024 * 1024
-            val partBuf = ByteArray(PART_SIZE)
+            val partBuf = ByteArray(partSize)
             val completedParts = mutableListOf<CompletedPart>()
             var uploadedBytes = 0L
 

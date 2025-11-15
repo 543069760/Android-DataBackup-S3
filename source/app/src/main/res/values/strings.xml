@@ -426,4 +426,6 @@
     <string name="secret_access_key">Secret Access Key</string>
     <string name="bucket">Bucket</string>
     <string name="endpoint">Endpoint</string>
+    <string name="protocol">Protocol</string>
+    <string name="protocol_desc">Select HTTP or HTTPS protocol</string>
 </resources>

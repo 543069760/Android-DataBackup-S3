@@ -1,0 +1,29 @@
+feat(s3): 添加 HTTP/HTTPS 协议选择和动态分块大小计算  
+  
+- 在 S3Extra 数据模型中添加 S3Protocol 枚举(HTTP/HTTPS),默认为 HTTPS  
+- 实现基于文件大小的动态分块大小计算(最多 10000 个分块,每块最小 5MB)  
+- 将固定的 5MB 分块大小替换为自适应计算,以支持大文件上传  
+- 在 S3 设置页面使用 Clickable + ModalStringListDropdownMenu 添加协议选择 UI  
+- 更新 S3ClientImpl 根据选择的协议构建 endpoint URL  
+- 添加协议选择的字符串资源(英文和中文)  
+- 更新 IndexViewModel.updateS3Entity() 方法以接受 protocol 参数  
+  
+此变更允许用户:  
+1. 为本地 S3 兼容存储(如 MinIO)选择 HTTP 协议,避免无 SSL 证书时的访问错误  
+2. 通过自动计算合适的分块大小上传大文件,不会超过 S3 的 10000 个分块限制  
+
+---
+
+feat(s3): Add HTTP/HTTPS protocol selection and dynamic multipart upload chunk size  
+  
+- Add S3Protocol enum (HTTP/HTTPS) to S3Extra data model with HTTPS as default  
+- Implement dynamic chunk size calculation based on file size (max 10000 parts, min 5MB per part)  
+- Replace fixed 5MB chunk size with adaptive calculation to support large file uploads  
+- Add protocol selection UI in S3 setup page using Clickable + ModalStringListDropdownMenu  
+- Update S3ClientImpl to build endpoint URL based on selected protocol  
+- Add string resources for protocol selection (English and Chinese)  
+- Update IndexViewModel.updateS3Entity() to accept protocol parameter  
+  
+This change allows users to:  
+1. Select HTTP protocol for local S3-compatible storage (e.g., MinIO) without SSL certificates  
+2. Upload large files without exceeding S3's 10000 part limit by automatically calculating appropriate chunk sizes

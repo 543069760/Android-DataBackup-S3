@@ -56,7 +56,11 @@ See [documentation](https://DataBackupOfficial.github.io).
 </div>
 
 ## Download
+<<<<<<< HEAD
 Get the APK from the [Releases](https://github.com/543069760/Android-DataBackup-S3/tags).
+=======
+get the APK from the [Releases](https://github.com/543069760/Android-DataBackup-S3/tags).
+>>>>>>> f772398d28b57c1ef353c636231876e6684815bb
 
 ## Translation
 [<img src="https://hosted.weblate.org/widget/databackup/main/open-graph.png"
