@@ -1,5 +1,8 @@
 package com.xayah.feature.main.details
 
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.unit.dp
 import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
@@ -130,7 +133,18 @@ internal fun AppDetails(
 
         Spacer(Modifier.height(SizeTokens.Level12))
 
-        ActionsRow(opType = opType, blocked = app.extraInfo.blocked, frozen = app.extraInfo.enabled.not(), protected = app.preserveId != 0L, onBlock = onBlock, onFreeze = onFreeze, onLaunch = onLaunch, onProtect = onProtect, onDelete = onDelete)
+        ActionsRow(
+            opType = opType,
+            blocked = app.extraInfo.blocked,
+            frozen = app.extraInfo.enabled.not(),
+            protected = app.preserveId != 0L,
+            isProtecting = uiState.isProtecting,  // 传递状态
+            onBlock = onBlock,
+            onFreeze = onFreeze,
+            onLaunch = onLaunch,
+            onProtect = onProtect,
+            onDelete = onDelete
+        )
 
         Spacer(Modifier.height(SizeTokens.Level12))
 
@@ -312,6 +326,7 @@ private fun LabelsBottomSheet(
 @Composable
 private fun SingleChoiceSegmentedButtonRowScope.ActionItem(
     enabled: Boolean = true,
+    isLoading: Boolean = false,  // 新增参数  
     index: Int,
     count: Int,
     title: String,
@@ -328,7 +343,15 @@ private fun SingleChoiceSegmentedButtonRowScope.ActionItem(
     ) {
         CompositionLocalProvider(LocalContentColor provides LocalContentColor.current.withState(enabled)) {
             Column(modifier = Modifier.paddingVertical(SizeTokens.Level8), horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(imageVector = icon, contentDescription = null)
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        strokeWidth = 2.dp,
+                        strokeCap = StrokeCap.Round
+                    )
+                } else {
+                    Icon(imageVector = icon, contentDescription = null)
+                }
                 Text(text = title)
             }
         }
@@ -342,6 +365,7 @@ private fun ActionsRow(
     blocked: Boolean,
     frozen: Boolean,
     protected: Boolean,
+    isProtecting: Boolean,  // 添加这个参数
     onBlock: (Boolean) -> Unit,
     onFreeze: (Boolean) -> Unit,
     onLaunch: () -> Unit,
@@ -361,7 +385,7 @@ private fun ActionsRow(
             }
 
             OpType.RESTORE -> {
-                RestoreActions(protected, onProtect, onDelete)
+                RestoreActions(protected, isProtecting, onProtect, onDelete)  // 传递参数
             }
         }
     }
@@ -413,11 +437,17 @@ private fun SingleChoiceSegmentedButtonRowScope.BackupActions(blocked: Boolean, 
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SingleChoiceSegmentedButtonRowScope.RestoreActions(protected: Boolean, onProtect: () -> Unit, onDelete: () -> Unit) {
+private fun SingleChoiceSegmentedButtonRowScope.RestoreActions(
+    protected: Boolean,
+    isProtecting: Boolean,
+    onProtect: () -> Unit,
+    onDelete: () -> Unit
+) {
     val context = LocalContext.current
     val dialogState = LocalSlotScope.current!!.dialogSlot
     ActionItem(
         enabled = protected.not(),
+        isLoading = isProtecting,
         index = 0,
         count = 2,
         title = stringResource(R.string._protected),

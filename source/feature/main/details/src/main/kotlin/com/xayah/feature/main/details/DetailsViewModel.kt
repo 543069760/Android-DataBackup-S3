@@ -49,13 +49,23 @@ class DetailsViewModel @Inject constructor(
     private val target: Target = Target.valueOf(savedStateHandle.get<String>(MainRoutes.ARG_TARGET)!!.decodeURL().trim())
     private val isRefreshing: MutableStateFlow<Boolean> = MutableStateFlow(false)
 
+    // 添加 isProtecting 状态
+    private val isProtecting: MutableStateFlow<Boolean> = MutableStateFlow(false)
+
     val uiState: StateFlow<DetailsUiState> = when (target) {
         Target.Apps -> {
-            combine(appsRepo.getApp(id), isRefreshing, labelsRepo.getLabelsFlow(), labelsRepo.getAppRefsFlow()) { app, isRefreshing, labels, refs ->
+            combine(appsRepo.getApp(id), isRefreshing, isProtecting, labelsRepo.getLabelsFlow(), labelsRepo.getAppRefsFlow()) { app, isRefreshing, isProtecting, labels, refs ->
                 if (app != null) {
-                    Success.App(uuid = UUID.randomUUID(), isRefreshing = isRefreshing, labels = labels, app = app, refs = refs.filter { ref ->
-                        labels.find { it.label == ref.label } != null && ref.packageName == app.packageName && ref.userId == app.userId && ref.preserveId == app.preserveId
-                    })
+                    Success.App(
+                        uuid = UUID.randomUUID(),
+                        isRefreshing = isRefreshing,
+                        isProtecting = isProtecting,  // 添加这个字段
+                        labels = labels,
+                        app = app,
+                        refs = refs.filter { ref ->
+                            labels.find { it.label == ref.label } != null && ref.packageName == app.packageName && ref.userId == app.userId && ref.preserveId == app.preserveId
+                        }
+                    )
                 } else {
                     Error
                 }
@@ -63,11 +73,18 @@ class DetailsViewModel @Inject constructor(
         }
 
         Target.Files -> {
-            combine(filesRepo.getFile(id), isRefreshing, labelsRepo.getLabelsFlow(), labelsRepo.getFileRefsFlow()) { file, isRefreshing, labels, refs ->
+            combine(filesRepo.getFile(id), isRefreshing, isProtecting, labelsRepo.getLabelsFlow(), labelsRepo.getFileRefsFlow()) { file, isRefreshing, isProtecting, labels, refs ->
                 if (file != null) {
-                    Success.File(uuid = UUID.randomUUID(), isRefreshing = isRefreshing, labels = labels, file = file, refs = refs.filter { ref ->
-                        labels.find { it.label == ref.label } != null && ref.path == file.path && ref.preserveId == file.preserveId
-                    })
+                    Success.File(
+                        uuid = UUID.randomUUID(),
+                        isRefreshing = isRefreshing,
+                        isProtecting = isProtecting,  // 添加这个字段
+                        labels = labels,
+                        file = file,
+                        refs = refs.filter { ref ->
+                            labels.find { it.label == ref.label } != null && ref.path == file.path && ref.preserveId == file.preserveId
+                        }
+                    )
                 } else {
                     Error
                 }
@@ -229,18 +246,23 @@ class DetailsViewModel @Inject constructor(
 
     fun protect() {
         viewModelScope.launchOnDefault {
-            when (uiState.value) {
-                is Success.App -> {
-                    val state = uiState.value.castTo<Success.App>()
-                    val app = state.app
-                    appsRepo.protectApp(app.indexInfo.cloud, app)
-                }
+            isProtecting.emit(true)  // 开始保护操作
+            try {
+                when (uiState.value) {
+                    is Success.App -> {
+                        val state = uiState.value.castTo<Success.App>()
+                        val app = state.app
+                        appsRepo.protectApp(app.indexInfo.cloud, app)
+                    }
 
-                else -> {
-                    val state = uiState.value.castTo<Success.File>()
-                    val file = state.file
-                    filesRepo.protectFile(file.indexInfo.cloud, file)
+                    else -> {
+                        val state = uiState.value.castTo<Success.File>()
+                        val file = state.file
+                        filesRepo.protectFile(file.indexInfo.cloud, file)
+                    }
                 }
+            } finally {
+                isProtecting.emit(false)  // 完成保护操作(无论成功或失败)
             }
         }
     }
@@ -287,23 +309,26 @@ sealed interface DetailsUiState {
     sealed class Success(
         open val uuid: UUID,
         open val isRefreshing: Boolean,
+        open val isProtecting: Boolean,  // 添加这个字段
         open val labels: List<LabelEntity>,
     ) : DetailsUiState {
         data class App(
             override val uuid: UUID,
             override val isRefreshing: Boolean,
+            override val isProtecting: Boolean,  // 添加这个字段
             override val labels: List<LabelEntity>,
             val app: PackageEntity,
             val refs: List<LabelAppCrossRefEntity>,
-        ) : Success(uuid, isRefreshing, labels)
+        ) : Success(uuid, isRefreshing, isProtecting, labels)
 
         data class File(
             override val uuid: UUID,
             override val isRefreshing: Boolean,
+            override val isProtecting: Boolean,  // 添加这个字段
             override val labels: List<LabelEntity>,
             val file: MediaEntity,
             val refs: List<LabelFileCrossRefEntity>,
-        ) : Success(uuid, isRefreshing, labels)
+        ) : Success(uuid, isRefreshing, isProtecting, labels)
     }
 
     data object Error : DetailsUiState

@@ -341,18 +341,35 @@ class FilesRepo @Inject constructor(
     }
 
     private suspend fun protectCloudFile(cloudName: String, file: MediaEntity) = runCatching {
+        log { "Starting protectCloudFile for: ${file.name}" }
         cloudRepo.withClient(cloudName) { client, entity ->
             val protectedFile = file.copy(indexInfo = file.indexInfo.copy(preserveId = DateUtil.getTimestamp()))
             val remote = entity.remote
             val remoteFilesDir = pathUtil.getCloudRemoteFilesDir(remote)
             val src = "${remoteFilesDir}/${file.archivesRelativeDir}"
             val dst = "${remoteFilesDir}/${protectedFile.archivesRelativeDir}"
+
+            log { "Source: $src, Destination: $dst" }
+
             val tmpDir = pathUtil.getCloudTmpDir()
             val tmpJsonPath = PathUtil.getMediaRestoreConfigDst(tmpDir)
             rootService.writeJson(data = protectedFile, dst = tmpJsonPath)
+
+            log { "Uploading config to: $src" }
             cloudRepo.upload(client = client, src = tmpJsonPath, dstDir = src)
             rootService.deleteRecursively(tmpDir)
+
+            log { "Creating parent directory for: $dst" }
+            client.mkdirRecursively(dst = PathUtil.getParentPath(dst))
+
+            log { "Calling renameTo from $src to $dst" }
             client.renameTo(src, dst)
+
+            // 关键:更新数据库中的文件记录
+            log { "Updating database" }
+            filesDao.update(protectedFile)
+
+            log { "protectCloudFile completed successfully" }
         }
     }.withLog()
 

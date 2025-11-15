@@ -94,15 +94,69 @@ class S3ClientImpl(
 
     override fun renameTo(src: String, dst: String) {
         runBlocking {
-            s3Client?.copyObject(CopyObjectRequest {
-                copySource = "${extra.bucket}/${normalizeObjectKey(src)}"
-                bucket = extra.bucket
-                key = normalizeObjectKey(dst)
-            })
-            s3Client?.deleteObject(DeleteObjectRequest {
-                bucket = extra.bucket
-                key = normalizeObjectKey(src)
-            })
+            try {
+                log { "renameTo: $src to $dst" }
+
+                // 规范化路径,确保以 / 结尾表示目录
+                val srcPrefix = normalizeObjectKey(src) + "/"
+                val dstPrefix = normalizeObjectKey(dst) + "/"
+
+                log { "Listing objects with prefix: $srcPrefix" }
+
+                // 列出源目录下的所有对象
+                val listResponse = s3Client?.listObjectsV2(ListObjectsV2Request {
+                    bucket = extra.bucket
+                    prefix = srcPrefix
+                })
+
+                val objectsToDelete = listResponse?.contents ?: emptyList()
+
+                if (objectsToDelete.isEmpty()) {
+                    log { "No objects found to rename" }
+                    return@runBlocking
+                }
+
+                log { "Found ${objectsToDelete.size} objects to copy" }
+
+                // 逐个复制对象到新路径
+                objectsToDelete.forEach { obj ->
+                    val srcKey = obj.key ?: return@forEach
+                    val dstKey = srcKey.replaceFirst(srcPrefix, dstPrefix)
+
+                    log { "Copying from $srcKey to $dstKey" }
+
+                    s3Client?.copyObject(CopyObjectRequest {
+                        copySource = "${extra.bucket}/$srcKey"
+                        bucket = extra.bucket
+                        key = dstKey
+                    })
+                }
+
+                log { "Copy completed, deleting source objects" }
+
+                // 批量删除源对象
+                val objectIdentifiers = objectsToDelete.mapNotNull { obj ->
+                    obj.key?.let { key ->
+                        ObjectIdentifier { this.key = key }
+                    }
+                }
+
+                if (objectIdentifiers.isNotEmpty()) {
+                    val deleteRequest = Delete {
+                        objects = objectIdentifiers
+                    }
+
+                    s3Client?.deleteObjects(DeleteObjectsRequest {
+                        bucket = extra.bucket
+                        delete = deleteRequest
+                    })
+                }
+
+                log { "renameTo completed successfully" }
+            } catch (e: Exception) {
+                log { "renameTo failed: ${e.message}" }
+                throw e
+            }
         }
     }
 

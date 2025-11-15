@@ -797,6 +797,9 @@ class AppsRepo @Inject constructor(
             cloudRepo.upload(client = client, src = tmpJsonPath, dstDir = src)
             rootService.deleteRecursively(tmpDir)
             client.renameTo(src, dst)
+
+            // 添加数据库更新
+            appsDao.update(protectedApp)
         }
     }.withLog()
 
