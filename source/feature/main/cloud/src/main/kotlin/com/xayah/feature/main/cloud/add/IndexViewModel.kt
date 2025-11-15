@@ -15,6 +15,7 @@ import com.xayah.core.model.database.SFTPExtra
 import com.xayah.core.model.database.SMBExtra
 import com.xayah.core.model.database.WebDAVExtra
 import com.xayah.core.model.database.S3Extra
+import com.xayah.core.model.database.S3Protocol
 import com.xayah.core.network.client.getCloud
 import com.xayah.core.ui.material3.SnackbarDuration
 import com.xayah.core.ui.material3.SnackbarType
@@ -126,7 +127,8 @@ class IndexViewModel @Inject constructor(
         accessKeyId: String,
         secretAccessKey: String,
         bucket: String,
-        endpoint: String
+        endpoint: String,
+        protocol: S3Protocol  // 新增参数
     ) {
         val extra = GsonUtil().toJson(
             S3Extra(
@@ -134,7 +136,8 @@ class IndexViewModel @Inject constructor(
                 accessKeyId = accessKeyId,
                 secretAccessKey = secretAccessKey,
                 bucket = bucket,
-                endpoint = endpoint
+                endpoint = endpoint,
+                protocol = protocol  // 新增字段
             )
         )
         emitIntent(

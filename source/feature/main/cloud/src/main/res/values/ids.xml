@@ -55,4 +55,6 @@
     <item name="secret_access_key" type="string"/>
     <item name="bucket" type="string"/>
     <item name="endpoint" type="string"/>
+    <item name="protocol" type="string"/>
+    <item name="protocol_desc" type="string"/>
 </resources>

@@ -414,4 +414,6 @@
     <string name="secret_access_key">S3访问密钥</string>
     <string name="bucket">存储桶</string>
     <string name="endpoint">端点</string>
+    <string name="protocol">协议</string>
+    <string name="protocol_desc">选择HTTP或HTTPS协议</string>
 </resources>

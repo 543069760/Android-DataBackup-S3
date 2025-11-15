@@ -10,6 +10,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
+import androidx.compose.material.icons.rounded.Public
+import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
@@ -20,6 +22,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -33,8 +36,11 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xayah.core.model.database.S3Extra
+import com.xayah.core.model.database.S3Protocol
 import com.xayah.core.network.util.getExtraEntity
 import com.xayah.core.ui.component.Clickable
+import com.xayah.core.ui.component.FilterChip
+import com.xayah.core.ui.component.ModalStringListDropdownMenu
 import com.xayah.core.ui.component.LocalSlotScope
 import com.xayah.core.ui.component.Title
 import com.xayah.core.ui.component.confirm
@@ -49,9 +55,6 @@ import com.xayah.core.ui.util.LocalNavController
 import com.xayah.feature.main.cloud.AccountSetupScaffold
 import com.xayah.feature.main.cloud.R
 import com.xayah.feature.main.cloud.SetupTextField
-
-import androidx.compose.material.icons.rounded.Public
-import androidx.compose.material.icons.rounded.Folder
 
 @ExperimentalLayoutApi
 @ExperimentalAnimationApi
@@ -73,6 +76,17 @@ fun PageS3Setup() {
     var secretKeyVisible by rememberSaveable { mutableStateOf(false) }
     var bucket by rememberSaveable(uiState.cloudEntity) { mutableStateOf(uiState.cloudEntity?.getExtraEntity<S3Extra>()?.bucket ?: "") }
     var endpoint by rememberSaveable(uiState.cloudEntity) { mutableStateOf(uiState.cloudEntity?.getExtraEntity<S3Extra>()?.endpoint ?: "") }
+
+    // 协议选择状态
+    val protocolOptions = listOf("HTTPS", "HTTP")
+    var protocolIndex by rememberSaveable(uiState.cloudEntity) {
+        mutableIntStateOf(
+            when (uiState.cloudEntity?.getExtraEntity<S3Extra>()?.protocol) {
+                S3Protocol.HTTP -> 1
+                else -> 0
+            }
+        )
+    }
 
     val allFilled by rememberSaveable(
         name,
@@ -101,7 +115,8 @@ fun PageS3Setup() {
                             accessKeyId = accessKeyId,
                             secretAccessKey = secretAccessKey,
                             bucket = bucket,
-                            endpoint = endpoint
+                            endpoint = endpoint,
+                            protocol = if (protocolIndex == 0) S3Protocol.HTTPS else S3Protocol.HTTP
                         )
                         viewModel.emitIntent(IndexUiIntent.TestConnection)
                     }
@@ -119,7 +134,8 @@ fun PageS3Setup() {
                         accessKeyId = accessKeyId,
                         secretAccessKey = secretAccessKey,
                         bucket = bucket,
-                        endpoint = endpoint
+                        endpoint = endpoint,
+                        protocol = if (protocolIndex == 0) S3Protocol.HTTPS else S3Protocol.HTTP
                     )
                     viewModel.emitIntent(IndexUiIntent.CreateAccount(navController = navController))
                 }
@@ -209,6 +225,30 @@ fun PageS3Setup() {
                     label = stringResource(id = R.string.endpoint)
                 )
 
+                // 协议选择状态
+                var showProtocolMenu by rememberSaveable { mutableStateOf(false) }
+
+                Clickable(
+                    enabled = uiState.isProcessing.not(),
+                    title = stringResource(id = R.string.protocol),
+                    value = protocolOptions[protocolIndex],
+                    desc = stringResource(id = R.string.protocol_desc),
+                ) {
+                    showProtocolMenu = true
+                }
+
+// 弹出菜单
+                ModalStringListDropdownMenu(
+                    expanded = showProtocolMenu,
+                    selectedIndex = protocolIndex,
+                    list = protocolOptions,
+                    onSelected = { index, _ ->
+                        protocolIndex = index
+                        showProtocolMenu = false
+                    },
+                    onDismissRequest = { showProtocolMenu = false }
+                )
+
                 Clickable(
                     enabled = allFilled && uiState.isProcessing.not(),
                     title = stringResource(id = R.string.remote_path),
@@ -223,7 +263,8 @@ fun PageS3Setup() {
                             accessKeyId = accessKeyId,
                             secretAccessKey = secretAccessKey,
                             bucket = bucket,
-                            endpoint = endpoint
+                            endpoint = endpoint,
+                            protocol = if (protocolIndex == 0) S3Protocol.HTTPS else S3Protocol.HTTP
                         )
                         viewModel.emitIntent(IndexUiIntent.SetRemotePath(context = context))
                         remote = uiState.cloudEntity!!.remote
