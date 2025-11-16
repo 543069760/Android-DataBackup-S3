@@ -70,39 +70,62 @@ class CloudRepository @Inject constructor(
         src: String,
         dstDir: String,
         deleteAfterDownloaded: Boolean = true,
+        maxRetries: Int = 3,  // 添加重试次数参数
         onDownloading: (written: Long, total: Long) -> Unit = { _, _ -> },
         onDownloaded: suspend (path: String) -> Unit,
-    ): ShellResult =
-        run {
-            log { "Downloading..." }
+    ): ShellResult = run {
+        log { "Downloading..." }
 
-            var code = 0
-            val out = mutableListOf<String>()
-            rootService.deleteRecursively(dstDir)
-            rootService.mkdirs(dstDir)
-            PathUtil.setFilesDirSELinux(context)
+        var code = 0
+        val out = mutableListOf<String>()
+        rootService.deleteRecursively(dstDir)
+        rootService.mkdirs(dstDir)
+        PathUtil.setFilesDirSELinux(context)
+
+        var lastException: Throwable? = null
+        var attempt = 0
+        var success = false
+
+        while (attempt < maxRetries && !success) {
+            attempt++
+            log { "Download attempt $attempt/$maxRetries for $src" }
 
             runCatching {
                 client.download(src = src, dst = dstDir, onDownloading = onDownloading)
+                success = true
             }.onFailure {
-                code = -2
-                if (it.localizedMessage != null)
-                    out.add(log { it.localizedMessage!! })
-            }
+                lastException = it
+                log { "Download attempt $attempt failed: ${it.localizedMessage}" }
 
-            if (code == 0) {
-                onDownloaded("$dstDir/${PathUtil.getFileName(src)}")
-            } else {
-                out.add(log { "Failed to download $src." })
-            }
-            if (deleteAfterDownloaded)
-                rootService.deleteRecursively(dstDir).also { result ->
-                    code = if (result) code else -1
-                    if (result.not()) out.add(log { "Failed to delete $dstDir." })
+                if (attempt < maxRetries) {
+                    // 等待后重试,使用指数退避
+                    val delayMs = 1000L * (1 shl (attempt - 1))  // 1s, 2s, 4s
+                    log { "Retrying in ${delayMs}ms..." }
+                    kotlinx.coroutines.delay(delayMs)
                 }
-
-            ShellResult(code = code, input = listOf(), out = out)
+            }
         }
+
+        if (!success) {
+            code = -2
+            if (lastException?.localizedMessage != null)
+                out.add(log { "Failed after $maxRetries attempts: ${lastException!!.localizedMessage!!}" })
+        }
+
+        if (code == 0) {
+            onDownloaded("$dstDir/${PathUtil.getFileName(src)}")
+        } else {
+            out.add(log { "Failed to download $src." })
+        }
+
+        if (deleteAfterDownloaded)
+            rootService.deleteRecursively(dstDir).also { result ->
+                code = if (result) code else -1
+                if (result.not()) out.add(log { "Failed to delete $dstDir." })
+            }
+
+        ShellResult(code = code, input = listOf(), out = out)
+    }
 
     suspend fun getClient(name: String? = null): Pair<CloudClient, CloudEntity> {
         val entity = queryByName(name ?: context.readCloudActivatedAccountName().first())
@@ -112,9 +135,13 @@ class CloudRepository @Inject constructor(
     }
 
     suspend fun withClient(name: String? = null, block: suspend (client: CloudClient, entity: CloudEntity) -> Unit) = run {
+        log { "withClient: Getting client for $name" }
         val (client, entity) = getClient(name)
+        log { "withClient: Client connected, executing block" }
         block(client, entity)
+        log { "withClient: Block completed, disconnecting client" }
         client.disconnect()
+        log { "withClient: Client disconnected" }
     }
 
     suspend fun withActivatedClients(block: suspend (clients: List<Pair<CloudClient, CloudEntity>>) -> Unit) = run {

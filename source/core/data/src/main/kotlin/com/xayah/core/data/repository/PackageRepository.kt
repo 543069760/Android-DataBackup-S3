@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import com.xayah.core.data.util.srcDir
 import com.xayah.core.database.dao.PackageDao
+import com.xayah.core.database.dao.MediaDao
 import com.xayah.core.datastore.readCompressionType
 import com.xayah.core.datastore.readReloadDumpApk
 import com.xayah.core.model.CompressionType
@@ -43,6 +44,7 @@ class PackageRepository @Inject constructor(
     private val rootService: RemoteRootService,
     private val cloudRepository: CloudRepository,
     private val packageDao: PackageDao,
+    private val mediaDao: MediaDao,
     private val pathUtil: PathUtil,
 ) {
     companion object {
@@ -551,7 +553,6 @@ class PackageRepository @Inject constructor(
                 var dir = if (mainBackup) "${appsDir}/${packageName}/user_${userId}" else "${appsDir}/${packageName}/user_${userId}@${preserveId}"
                 onMsgUpdate(log { "packageName: $packageName, preserveId: $preserveId, userId: $userId" })
                 if (mainBackup.not() && preserveId < 1000000000000) {
-                    // Diff from main backup (without preserveId)
                     val timestamp = DateUtil.getTimestamp()
                     val newDir = "${appsDir}/${packageName}/user_${userId}@${timestamp}"
                     onMsgUpdate(log { "$dir move to $newDir" })
@@ -845,12 +846,20 @@ class PackageRepository @Inject constructor(
      *        /.../DataBackup/apps/$packageName/user_$userId@$timestamp/${dataType}.tar.*
      */
     suspend fun reloadAppsFromCloud12x(cloud: String, onMsgUpdate: suspend (String) -> Unit) {
+        val failedApps = mutableListOf<String>()
+
         runCatching {
             cloudRepository.withClient(cloud) { client, cloudEntity ->
+                log { "Cleaning up old records for cloud: $cloud, backupDir: ${cloudEntity.remote}" }
+                val oldApps = packageDao.queryPackages(OpType.RESTORE, cloud, cloudEntity.remote)
+                oldApps.forEach { packageDao.delete(it.id) }
+                log { "Deleted ${oldApps.size} old app records" }
                 onMsgUpdate(log { "Reloading..." })
                 val packageManager = context.packageManager
                 val appsDir = pathUtil.getCloudRemoteAppsDir(cloudEntity.remote)
+                log { "About to call walkFileTree for path: $appsDir" }
                 val pathList = client.walkFileTree(appsDir)
+                log { "walkFileTree returned ${pathList.size} paths" }
                 val typedPathSet = mutableSetOf<String>()
                 BaseUtil.mkdirs(context.iconDir())
                 log { "Total paths count: ${pathList.size}" }
@@ -886,6 +895,7 @@ class PackageRepository @Inject constructor(
                         var preserveId = split[1].toLong()
                         val mainBackup: Boolean = preserveId == -1L
                         val userId = split[2].toInt()
+
                         var dir = if (mainBackup) "${appsDir}/${packageName}/user_${userId}" else "${appsDir}/${packageName}/user_${userId}@${preserveId}"
                         onMsgUpdate(log { "packageName: $packageName, preserveId: $preserveId, userId: $userId" })
                         if (mainBackup.not() && preserveId < 1000000000000) {
@@ -910,6 +920,7 @@ class PackageRepository @Inject constructor(
                             permissionState = DataState.Disabled,
                             ssaidState = DataState.Disabled
                         )
+
                         val packageEntity = runCatching {
                             val tmpDir = pathUtil.getCloudTmpDir()
                             var entity: PackageEntity? = null
@@ -992,9 +1003,9 @@ class PackageRepository @Inject constructor(
                                                                 packageEntity.packageInfo.versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                                                                     longVersionCode
                                                                 } else {
+                                                                    @Suppress("DEPRECATION")
                                                                     versionCode.toLong()
                                                                 }
-                                                                packageEntity.packageInfo.flags = applicationInfo?.flags ?: 0
                                                                 val iconPath = pathUtil.getPackageIconPath(packageName, false)
                                                                 val iconExists = rootService.exists(iconPath)
                                                                 if (iconExists.not()) {
@@ -1033,27 +1044,51 @@ class PackageRepository @Inject constructor(
                                         }
                                     }
 
-                                    DataType.PACKAGE_USER_DE.type, DataType.PACKAGE_DATA.type, DataType.PACKAGE_OBB.type, DataType.PACKAGE_MEDIA.type -> {
-                                        onMsgUpdate(log { "Dumping ${archivePath.nameWithoutExtension}..." })
+                                    DataType.PACKAGE_USER_DE.type -> {
+                                        onMsgUpdate(log { "Dumping user_de..." })
+                                        val type = CompressionType.suffixOf(archivePath.extension)
+                                        if (type != null) {
+                                            log { "Archive compression type: ${type.type}" }
+                                            packageEntity.indexInfo.compressionType = type
+                                            packageEntity.dataStates.userDeState = DataState.Selected
+                                        } else {
+                                            log { "Failed to parse compression type: ${archivePath.extension}" }
+                                        }
+                                    }
 
-                                        when (archivePath.nameWithoutExtension) {
-                                            DataType.PACKAGE_USER_DE.type -> {
-                                                dataStates.userDeState = DataState.Selected
-                                            }
+                                    DataType.PACKAGE_DATA.type -> {
+                                        onMsgUpdate(log { "Dumping data..." })
+                                        val type = CompressionType.suffixOf(archivePath.extension)
+                                        if (type != null) {
+                                            log { "Archive compression type: ${type.type}" }
+                                            packageEntity.indexInfo.compressionType = type
+                                            packageEntity.dataStates.dataState = DataState.Selected
+                                        } else {
+                                            log { "Failed to parse compression type: ${archivePath.extension}" }
+                                        }
+                                    }
 
-                                            DataType.PACKAGE_DATA.type -> {
-                                                dataStates.dataState = DataState.Selected
-                                            }
+                                    DataType.PACKAGE_OBB.type -> {
+                                        onMsgUpdate(log { "Dumping obb..." })
+                                        val type = CompressionType.suffixOf(archivePath.extension)
+                                        if (type != null) {
+                                            log { "Archive compression type: ${type.type}" }
+                                            packageEntity.indexInfo.compressionType = type
+                                            packageEntity.dataStates.obbState = DataState.Selected
+                                        } else {
+                                            log { "Failed to parse compression type: ${archivePath.extension}" }
+                                        }
+                                    }
 
-                                            DataType.PACKAGE_OBB.type -> {
-                                                dataStates.obbState = DataState.Selected
-                                            }
-
-                                            DataType.PACKAGE_MEDIA.type -> {
-                                                dataStates.mediaState = DataState.Selected
-                                            }
-
-                                            else -> {}
+                                    DataType.PACKAGE_MEDIA.type -> {
+                                        onMsgUpdate(log { "Dumping media..." })
+                                        val type = CompressionType.suffixOf(archivePath.extension)
+                                        if (type != null) {
+                                            log { "Archive compression type: ${type.type}" }
+                                            packageEntity.indexInfo.compressionType = type
+                                            packageEntity.dataStates.mediaState = DataState.Selected
+                                        } else {
+                                            log { "Failed to parse compression type: ${archivePath.extension}" }
                                         }
                                     }
 
@@ -1062,16 +1097,77 @@ class PackageRepository @Inject constructor(
                             }.withLog()
                         }
 
+                        // 关键修复:在 upsert 之前查询现有记录,避免重复插入
+                        val existingApp = packageDao.query(
+                            packageName = packageEntity.packageName, // 这里修复了 packageName 引用
+                            opType = OpType.RESTORE,
+                            userId = packageEntity.indexInfo.userId,
+                            preserveId = packageEntity.indexInfo.preserveId,
+                            cloud = cloud,
+                            backupDir = cloudEntity.remote
+                        )
+
+                        if (existingApp != null) {
+                            packageEntity.id = existingApp.id
+                        }
+
+                        // 关键修复:数据库写入
+                        log { "Attempting to upsert package: ${packageEntity.packageName}, id: ${packageEntity.id}, cloud: '${packageEntity.indexInfo.cloud}', backupDir: '${packageEntity.indexInfo.backupDir}'" }
+                        packageDao.upsert(packageEntity)
+                        log { "Successfully upserted package: ${packageEntity.packageName}" }
+
                         // Write config
                         val tmpDir = pathUtil.getCloudTmpDir()
                         val tmpJsonPath = PathUtil.getPackageRestoreConfigDst(tmpDir)
                         rootService.writeJson(data = packageEntity, dst = tmpJsonPath)
                         cloudRepository.upload(client = client, src = tmpJsonPath, dstDir = PathUtil.getParentPath(jsonPath))
                         rootService.deleteRecursively(tmpDir)
-                    }.withLog()
+                    }.onFailure { e ->
+                        // 现在可以正确访问 packageName 和 userId
+                        val split = typed.split("@")
+                        val packageName = split[0]
+                        val userId = split[2].toInt()
+                        log { "Failed to process app $typed: ${e.message}" }
+                        e.printStackTrace()
+                        failedApps.add("$packageName (user_$userId)")
+                    }
                 }
+
+                // 在操作完成后,如果有失败的应用,通知用户
+                if (failedApps.isNotEmpty()) {
+                    val failedMsg = "Reload completed with ${failedApps.size} failed apps:\n${failedApps.joinToString("\n")}"
+                    onMsgUpdate(log { failedMsg })
+                }
+
+                // 在批量激活之前添加调试查询
+                log { "Debugging: Checking what's in database..." }
+                val allApps = packageDao.queryPackages(OpType.RESTORE, false)
+                log { "Total apps in database: ${allApps.size}" }
+                allApps.forEach { app ->
+                    log { "DB App: ${app.packageName}, cloud='${app.indexInfo.cloud}', backupDir='${app.indexInfo.backupDir}', activated=${app.extraInfo.activated}" }
+                }
+                log { "Query params: cloud='$cloud', backupDir='${cloudEntity.remote}'" }
+
+                // 批量激活所有加载的应用
+                onMsgUpdate(log { "Activating all loaded apps..." })
+                log { "CloudEntity info: name='${cloudEntity.name}', remote='${cloudEntity.remote}'" }
+                log { "Query parameters: cloud=$cloud, backupDir=${cloudEntity.remote}" }
+                val loadedApps = packageDao.queryPackages(OpType.RESTORE, cloud, cloudEntity.remote)
+                log { "Found ${loadedApps.size} apps to activate" }
+                loadedApps.forEach { app ->
+                    app.extraInfo.activated = true
+                    packageDao.upsert(app)
+                }
+                log { "Activated ${loadedApps.size} apps" }
             }
         }.onFailure(rootService.onFailure)
+    }
+
+    suspend fun debugQueryPackages(cloudName: String, backupDir: String) {
+        val packages = packageDao.queryPackages(OpType.RESTORE, cloudName, backupDir)
+        packages.forEach { pkg ->
+            log { "Package: ${pkg.packageName}, activated: ${pkg.extraInfo.activated}, cloud: ${pkg.indexInfo.cloud}, backupDir: ${pkg.indexInfo.backupDir}" }
+        }
     }
 
     /**
@@ -1081,8 +1177,13 @@ class PackageRepository @Inject constructor(
     suspend fun reloadFilesFromCloud12x(cloud: String, onMsgUpdate: suspend (String) -> Unit) {
         runCatching {
             cloudRepository.withClient(cloud) { client, cloudEntity ->
+                log { "Cleaning up old file records for cloud: $cloud, backupDir: ${cloudEntity.remote}" }
+                val oldFiles = mediaDao.query(OpType.RESTORE, cloud, cloudEntity.remote)
+                oldFiles.forEach { mediaDao.delete(it.id) }
+                log { "Deleted ${oldFiles.size} old file records" }
                 onMsgUpdate(log { "Reloading..." })
                 val filesDir = pathUtil.getCloudRemoteFilesDir(cloudEntity.remote)
+                log { "Files directory: $filesDir" }
                 val pathList = client.walkFileTree(filesDir)
                 val typedPathSet = mutableSetOf<String>()
                 log { "Total paths count: ${pathList.size}" }
@@ -1111,7 +1212,7 @@ class PackageRepository @Inject constructor(
                 log { "Files count: ${typedPathSet.size}" }
                 typedPathSet.forEach { typed ->
                     runCatching {
-                        // For each $packageName@$preserveId
+                        // For each $name@$preserveId
                         val split = typed.split("@")
                         val name = split[0]
                         var preserveId = split[1].toLong()
@@ -1168,20 +1269,17 @@ class PackageRepository @Inject constructor(
                             ),
                         )
 
-                        val archives = client.walkFileTree(dir)
-
+                        val archives = pathList.filter { p -> p.pathString.startsWith(dir) && p.pathString != jsonPath }
                         archives.forEach { archivePath ->
-                            // For each archive
                             log { "Media archive: ${archivePath.pathString}" }
                             runCatching {
                                 when (archivePath.nameWithoutExtension) {
-                                    DataType.PACKAGE_USER.type -> {
+                                    DataType.PACKAGE_MEDIA.type -> {
                                         onMsgUpdate(log { "Dumping media..." })
                                         val type = CompressionType.suffixOf(archivePath.extension)
                                         if (type != null) {
                                             log { "Archive compression type: ${type.type}" }
                                             mediaEntity.indexInfo.compressionType = type
-                                            mediaEntity.extraInfo.existed = true
                                         } else {
                                             log { "Failed to parse compression type: ${archivePath.extension}" }
                                         }
@@ -1192,6 +1290,30 @@ class PackageRepository @Inject constructor(
                             }.withLog()
                         }
 
+                        // 在 upsert 之前查询现有记录,避免重复插入
+                        val existingMedia = mediaDao.query(
+                            opType = OpType.RESTORE,
+                            preserveId = mediaEntity.indexInfo.preserveId,
+                            name = mediaEntity.indexInfo.name,
+                            cloud = cloud,
+                            backupDir = cloudEntity.remote
+                        )
+
+                        // 如果存在,使用现有 ID
+                        if (existingMedia != null) {
+                            mediaEntity.id = existingMedia.id
+                        }
+
+                        // 数据库写入(只执行一次)
+                        log { "Attempting to upsert media: ${mediaEntity.indexInfo.name}, id: ${mediaEntity.id}, cloud: '$cloud', backupDir: '${cloudEntity.remote}'" }
+                        runCatching {
+                            mediaDao.upsert(mediaEntity)
+                            log { "Successfully upserted media: ${mediaEntity.indexInfo.name}" }
+                        }.onFailure { e ->
+                            log { "Failed to upsert media: ${mediaEntity.indexInfo.name}, error: ${e.message}" }
+                            e.printStackTrace()
+                        }
+
                         // Write config
                         val tmpDir = pathUtil.getCloudTmpDir()
                         val tmpJsonPath = PathUtil.getMediaRestoreConfigDst(tmpDir)
@@ -1200,6 +1322,17 @@ class PackageRepository @Inject constructor(
                         rootService.deleteRecursively(tmpDir)
                     }.withLog()
                 }
+
+                // 批量激活所有加载的文件
+                onMsgUpdate(log { "Activating all loaded files..." })
+                log { "Query parameters for files: cloud=$cloud, backupDir=${cloudEntity.remote}" }
+                val loadedFiles = mediaDao.query(OpType.RESTORE, cloud, cloudEntity.remote)
+                log { "Found ${loadedFiles.size} files to activate" }
+                loadedFiles.forEach { file ->
+                    file.extraInfo.activated = true
+                    mediaDao.upsert(file)
+                }
+                log { "Activated ${loadedFiles.size} files" }
             }
         }.onFailure(rootService.onFailure)
     }
