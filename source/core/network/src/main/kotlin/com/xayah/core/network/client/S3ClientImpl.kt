@@ -360,14 +360,20 @@ class S3ClientImpl(
         return DirChildrenParcelable(files = files, directories = directories)
     }
 
-    override fun walkFileTree(src: String): List<PathParcelable> {
+    override fun walkFileTree(path: String): List<PathParcelable> {
         val pathList = mutableListOf<PathParcelable>()
+        val prefix = normalizeObjectKey(path) + "/"
+
+        log { "walkFileTree called with path: $path, normalized prefix: $prefix" }
+        log { "S3 client state: ${if (s3Client != null) "connected" else "null"}" }
+
         runBlocking {
-            val prefix = normalizeObjectKey(src)
             val response = s3Client?.listObjectsV2(ListObjectsV2Request {
                 bucket = extra.bucket
                 this.prefix = prefix
             })
+
+            log { "ListObjectsV2 response: ${response?.contents?.size ?: 0} objects" }
 
             response?.contents?.forEach { obj ->
                 obj.key?.let { key ->
@@ -377,6 +383,7 @@ class S3ClientImpl(
                 }
             }
         }
+        log { "walkFileTree returning ${pathList.size} paths" }
         return pathList
     }
 

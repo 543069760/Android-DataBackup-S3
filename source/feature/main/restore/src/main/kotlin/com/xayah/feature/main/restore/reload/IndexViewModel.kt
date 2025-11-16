@@ -23,6 +23,7 @@ data class IndexUiState(
     val versionIndex: Int,
     val isLoading: Boolean,
     val text: String,
+    val failedApps: List<String> = emptyList()  // 添加失败应用列表
 ) : UiState
 
 sealed class IndexUiIntent : UiIntent {
@@ -112,13 +113,24 @@ class IndexViewModel @Inject constructor(
                         emitState(uiState.value.copy(text = it))
                     }
                 } else {
-                    // Cloud
-                    packageRepo.reloadAppsFromCloud12x(state.cloudName) {
-                        emitState(uiState.value.copy(text = it))
+                    // Cloud - 添加失败应用捕获
+                    val failedApps = mutableListOf<String>()
+
+                    packageRepo.reloadAppsFromCloud12x(state.cloudName) { msg ->
+                        emitState(uiState.value.copy(text = msg))
+                        // 解析失败信息
+                        if (msg.contains("failed apps:")) {
+                            val lines = msg.split("\n")
+                            failedApps.addAll(lines.drop(1))  // 跳过第一行标题
+                        }
                     }
+
                     packageRepo.reloadFilesFromCloud12x(state.cloudName) {
                         emitState(uiState.value.copy(text = it))
                     }
+
+                    // 更新失败应用列表
+                    emitState(uiState.value.copy(failedApps = failedApps))
                 }
                 emitState(uiState.value.copy(isLoading = false, text = context.getString(R.string.finished)))
             }
