@@ -43,6 +43,7 @@ import com.xayah.feature.main.settings.backup.PageBackupSettings
 import com.xayah.feature.main.settings.blacklist.PageBlackList
 import com.xayah.feature.main.settings.language.PageLanguageSelector
 import com.xayah.feature.main.settings.restore.PageRestoreSettings
+import com.xayah.feature.main.settings.cache.PageCacheManagement
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.runBlocking
@@ -122,6 +123,9 @@ class MainActivity : AppCompatActivity() {
                         }
                         composable(MainRoutes.MediumRestoreProcessingGraph.route) {
                             MediumRestoreProcessingGraph()
+                        }
+                        composable(MainRoutes.CacheManagement.route) {
+                            PageCacheManagement()
                         }
                         composable(MainRoutes.Settings.route) {
                             PageSettings()

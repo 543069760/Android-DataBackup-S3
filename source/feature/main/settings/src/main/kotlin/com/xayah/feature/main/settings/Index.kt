@@ -122,6 +122,13 @@ fun PageSettings() {
                     title = stringResource(id = R.string.auto_screen_off),
                     checkedText = stringResource(id = R.string.auto_screen_off_desc),
                 )
+                // 添加缓存管理入口
+                Clickable(
+                    title = stringResource(id = R.string.cache_management),
+                    value = stringResource(id = R.string.cache_management_desc),
+                ) {
+                    navController.navigateSingle(MainRoutes.CacheManagement.route)
+                }
                 Clickable(
                     title = stringResource(id = R.string.configurations),
                     value = stringResource(id = R.string.configurations_desc),

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="cache_management">Cache Management</string>
+    <string name="cache_management_desc">View and clear apps cache</string>
+    <string name="app_cache">Apps Cache</string>
+    <string name="file_cache">Files Cache</string>
+    <string name="refresh">Refresh</string>
+    <string name="clear_all">Clear Alls</string>
+</resources>

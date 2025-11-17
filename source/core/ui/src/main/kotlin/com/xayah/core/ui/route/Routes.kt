@@ -40,6 +40,7 @@ sealed class MainRoutes(val route: String) {
         fun getRoute(name: String) = "main_s3_setup/$name"
     }
 
+    data object CacheManagement : MainRoutes(route = "main_cache_management")
     data object Settings : MainRoutes(route = "main_settings")
     data object Restore : MainRoutes(route = "main_restore")
     data object Reload : MainRoutes(route = "main_reload/{$ARG_ACCOUNT_NAME}/{$ARG_ACCOUNT_REMOTE}") {

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="cache_management">缓存管理</string>
+    <string name="cache_management_desc">查看和清理应用缓存</string>
+    <string name="app_cache">应用缓存</string>
+    <string name="file_cache">文件缓存</string>
+    <string name="refresh">刷新</string>
+    <string name="clear_all">全部清除</string>
+</resources>
