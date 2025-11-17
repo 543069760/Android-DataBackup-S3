@@ -407,6 +407,7 @@
     <string name="notification_desc">这是发布必要通知所必需的</string>
     <string name="permission_is_denied">权限被拒绝</string>
     <string name="root_denied_msg">请检查您的Root管理器并重新启动应用程序</string>
+    <string name="clear_all">清空</string>
     <string name="s3_setup">S3配置</string>
     <string name="region">区域</string>
     <string name="access_key_id">S3密钥ID</string>
