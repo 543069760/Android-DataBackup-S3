@@ -103,7 +103,11 @@ class SFTPClientImpl(private val entity: CloudEntity, private val extra: SFTPExt
         return withSFTPClient { it.open(src, setOf(OpenMode.READ, OpenMode.WRITE, OpenMode.CREAT)) }
     }
 
-    override fun renameTo(src: String, dst: String) {
+    override fun renameTo(
+        src: String,
+        dst: String,
+        onProgress: ((currentPart: Int, totalParts: Int, currentFile: Int, totalFiles: Int) -> Unit)?
+    ) {
         log { "Rename $src to $dst" }
         withSFTPClient { it.rename(src, dst) }
     }

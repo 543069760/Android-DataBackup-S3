@@ -1,6 +1,7 @@
 package com.xayah.core.data.repository
 
 import android.content.Context
+import com.xayah.core.network.client.S3ClientImpl
 import com.xayah.core.database.dao.MediaDao
 import com.xayah.core.datastore.ConstantUtil
 import com.xayah.core.datastore.di.DbDispatchers.Default
@@ -320,10 +321,14 @@ class FilesRepo @Inject constructor(
         filesDao.delete(ids)
     }
 
-    suspend fun protectFile(cloudName: String?, file: MediaEntity) {
+    suspend fun protectFile(
+        cloudName: String?,
+        file: MediaEntity,
+        onProgress: ((currentPart: Int, totalParts: Int, currentFile: Int, totalFiles: Int) -> Unit)? = null
+    ) {
         if (cloudName.isNullOrEmpty().not()) {
             cloudName?.apply {
-                protectCloudFile(this, file)
+                protectCloudFile(this, file, onProgress)
             }
         } else {
             protectLocalFile(file)
@@ -340,8 +345,13 @@ class FilesRepo @Inject constructor(
         filesDao.update(protectedFile)
     }
 
-    private suspend fun protectCloudFile(cloudName: String, file: MediaEntity) = runCatching {
+    private suspend fun protectCloudFile(
+        cloudName: String,
+        file: MediaEntity,
+        onProgress: ((currentPart: Int, totalParts: Int, currentFile: Int, totalFiles: Int) -> Unit)? = null
+    ) = runCatching {
         log { "Starting protectCloudFile for: ${file.name}" }
+        log { "onProgress callback is ${if (onProgress == null) "NULL" else "NOT NULL"}" }
         cloudRepo.withClient(cloudName) { client, entity ->
             val protectedFile = file.copy(indexInfo = file.indexInfo.copy(preserveId = DateUtil.getTimestamp()))
             val remote = entity.remote
@@ -363,9 +373,20 @@ class FilesRepo @Inject constructor(
             client.mkdirRecursively(dst = PathUtil.getParentPath(dst))
 
             log { "Calling renameTo from $src to $dst" }
-            client.renameTo(src, dst)
 
-            // 关键:更新数据库中的文件记录
+            // 使用带进度回调的 renameTo
+            if (client is S3ClientImpl) {
+                log { "Using S3ClientImpl with progress callback" }
+                client.renameTo(src, dst) { currentPart, totalParts, currentFile, totalFiles ->
+                    log { "Progress callback invoked: Part $currentPart/$totalParts, File $currentFile/$totalFiles" }
+                    onProgress?.invoke(currentPart, totalParts, currentFile, totalFiles)
+                    log { "Progress: File $currentFile/$totalFiles, Part $currentPart/$totalParts" }
+                }
+            } else {
+                log { "Using non-S3 client, no progress callback" }
+                client.renameTo(src, dst)
+            }
+
             log { "Updating database" }
             filesDao.update(protectedFile)
 

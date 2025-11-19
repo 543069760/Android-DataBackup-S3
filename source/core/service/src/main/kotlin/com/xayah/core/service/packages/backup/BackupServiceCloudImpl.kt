@@ -131,7 +131,7 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
                         "${(progress * 100).toInt()}%"
                     }
                     entity.update(content = content)
-                    delay(500)
+                    delay(300)
                 }
             }
         }
@@ -144,7 +144,7 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
                 progress = read.toFloat() / total
                 val currentTime = System.currentTimeMillis()
                 val timeDiff = currentTime - lastTime
-                if (timeDiff >= 500) {
+                if (timeDiff >= 300) {
                     val bytesDiff = read - lastBytes
                     speed = if (timeDiff > 0) (bytesDiff * 1000 / timeDiff) else 0L
                     lastTime = currentTime

@@ -21,6 +21,8 @@ import com.xayah.core.model.database.PackageEntity
 import com.xayah.core.rootservice.service.RemoteRootService
 import com.xayah.core.ui.route.MainRoutes
 import com.xayah.core.util.decodeURL
+import com.xayah.core.util.LogUtil
+import com.xayah.core.util.module.combine
 import com.xayah.core.util.launchOnDefault
 import com.xayah.core.util.withMainContext
 import com.xayah.feature.main.details.DetailsUiState.Error
@@ -33,6 +35,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 import java.util.UUID
 import javax.inject.Inject
 
@@ -48,22 +51,44 @@ class DetailsViewModel @Inject constructor(
     private val id: Long = savedStateHandle.get<String>(MainRoutes.ARG_ID)?.toLongOrNull() ?: 0L
     private val target: Target = Target.valueOf(savedStateHandle.get<String>(MainRoutes.ARG_TARGET)!!.decodeURL().trim())
     private val isRefreshing: MutableStateFlow<Boolean> = MutableStateFlow(false)
-
     // 添加 isProtecting 状态
     private val isProtecting: MutableStateFlow<Boolean> = MutableStateFlow(false)
+    // 添加 protectProgress 状态
+    private val protectProgress: MutableStateFlow<String?> = MutableStateFlow(null)
+
+    companion object {
+        private const val TAG = "DetailsViewModel"
+    }
+
+    private fun log(onMsg: () -> String): String = run {
+        val msg = onMsg()
+        LogUtil.log { TAG to msg }
+        msg
+    }
 
     val uiState: StateFlow<DetailsUiState> = when (target) {
         Target.Apps -> {
-            combine(appsRepo.getApp(id), isRefreshing, isProtecting, labelsRepo.getLabelsFlow(), labelsRepo.getAppRefsFlow()) { app, isRefreshing, isProtecting, labels, refs ->
+            combine(
+                appsRepo.getApp(id),
+                isRefreshing,
+                isProtecting,
+                protectProgress,  // 添加这个
+                labelsRepo.getLabelsFlow(),
+                labelsRepo.getAppRefsFlow()
+            ) { app, isRefreshing, isProtecting, protectProgress, labels, refs ->
                 if (app != null) {
                     Success.App(
                         uuid = UUID.randomUUID(),
                         isRefreshing = isRefreshing,
-                        isProtecting = isProtecting,  // 添加这个字段
+                        isProtecting = isProtecting,
+                        protectProgress = protectProgress,  // 添加这个
                         labels = labels,
                         app = app,
                         refs = refs.filter { ref ->
-                            labels.find { it.label == ref.label } != null && ref.packageName == app.packageName && ref.userId == app.userId && ref.preserveId == app.preserveId
+                            labels.find { it.label == ref.label } != null &&
+                                    ref.packageName == app.packageName &&
+                                    ref.userId == app.userId &&
+                                    ref.preserveId == app.preserveId
                         }
                     )
                 } else {
@@ -73,16 +98,26 @@ class DetailsViewModel @Inject constructor(
         }
 
         Target.Files -> {
-            combine(filesRepo.getFile(id), isRefreshing, isProtecting, labelsRepo.getLabelsFlow(), labelsRepo.getFileRefsFlow()) { file, isRefreshing, isProtecting, labels, refs ->
+            combine(
+                filesRepo.getFile(id),
+                isRefreshing,
+                isProtecting,
+                protectProgress,  // 添加这个
+                labelsRepo.getLabelsFlow(),
+                labelsRepo.getFileRefsFlow()
+            ) { file, isRefreshing, isProtecting, protectProgress, labels, refs ->
                 if (file != null) {
                     Success.File(
                         uuid = UUID.randomUUID(),
                         isRefreshing = isRefreshing,
-                        isProtecting = isProtecting,  // 添加这个字段
+                        isProtecting = isProtecting,
+                        protectProgress = protectProgress,  // 添加这个
                         labels = labels,
                         file = file,
                         refs = refs.filter { ref ->
-                            labels.find { it.label == ref.label } != null && ref.path == file.path && ref.preserveId == file.preserveId
+                            labels.find { it.label == ref.label } != null &&
+                                    ref.path == file.path &&
+                                    ref.preserveId == file.preserveId
                         }
                     )
                 } else {
@@ -246,23 +281,51 @@ class DetailsViewModel @Inject constructor(
 
     fun protect() {
         viewModelScope.launchOnDefault {
-            isProtecting.emit(true)  // 开始保护操作
+            log { "protect() started" }  // 1. 方法开始
+            isProtecting.emit(true)
+            protectProgress.emit(null)
             try {
                 when (uiState.value) {
                     is Success.App -> {
                         val state = uiState.value.castTo<Success.App>()
                         val app = state.app
-                        appsRepo.protectApp(app.indexInfo.cloud, app)
+                        log { "Protecting app: ${app.packageName}" }
+                        log { "Calling appsRepo.protectApp with progress callback" }
+
+                        appsRepo.protectApp(app.indexInfo.cloud, app) { currentPart, totalParts, currentFile, totalFiles ->
+                            log { "Progress callback received in ViewModel: Part $currentPart/$totalParts, File $currentFile/$totalFiles" }
+                            viewModelScope.launch {
+                                protectProgress.emit("$currentPart/$totalParts")
+                                log { "protectProgress updated to: $currentPart/$totalParts" }
+                            }
+                        }
+
+                        log { "appsRepo.protectApp completed" }
                     }
 
                     else -> {
                         val state = uiState.value.castTo<Success.File>()
                         val file = state.file
-                        filesRepo.protectFile(file.indexInfo.cloud, file)
+                        log { "Protecting file: ${file.name}, cloud: ${file.indexInfo.cloud}" }  // 3. File 分支开始
+                        log { "Calling filesRepo.protectFile with progress callback" }  // 4. 调用前
+
+                        filesRepo.protectFile(file.indexInfo.cloud, file) { currentPart, totalParts, currentFile, totalFiles ->
+                            log { "Progress callback received in ViewModel: Part $currentPart/$totalParts, File $currentFile/$totalFiles" }  // 5. 回调被触发
+                            viewModelScope.launch {
+                                protectProgress.emit("$currentPart/$totalParts")
+                                log { "protectProgress updated to: $currentPart/$totalParts" }  // 6. 状态更新后
+                            }
+                        }
+                        log { "filesRepo.protectFile completed" }  // 7. 调用完成
                     }
                 }
+            } catch (e: Exception) {
+                log { "protect() failed with exception: ${e.message}" }  // 8. 异常捕获
             } finally {
-                isProtecting.emit(false)  // 完成保护操作(无论成功或失败)
+                log { "protect() finally block - cleaning up" }  // 9. 清理前
+                isProtecting.emit(false)
+                protectProgress.emit(null)
+                log { "protect() completed" }  // 10. 方法结束
             }
         }
     }
@@ -309,26 +372,29 @@ sealed interface DetailsUiState {
     sealed class Success(
         open val uuid: UUID,
         open val isRefreshing: Boolean,
-        open val isProtecting: Boolean,  // 添加这个字段
+        open val isProtecting: Boolean,
+        open val protectProgress: String?,  // 添加这个字段
         open val labels: List<LabelEntity>,
     ) : DetailsUiState {
         data class App(
             override val uuid: UUID,
             override val isRefreshing: Boolean,
-            override val isProtecting: Boolean,  // 添加这个字段
+            override val isProtecting: Boolean,
+            override val protectProgress: String?,  // 添加这个字段
             override val labels: List<LabelEntity>,
             val app: PackageEntity,
             val refs: List<LabelAppCrossRefEntity>,
-        ) : Success(uuid, isRefreshing, isProtecting, labels)
+        ) : Success(uuid, isRefreshing, isProtecting, protectProgress, labels)
 
         data class File(
             override val uuid: UUID,
             override val isRefreshing: Boolean,
-            override val isProtecting: Boolean,  // 添加这个字段
+            override val isProtecting: Boolean,
+            override val protectProgress: String?,  // 添加这个字段
             override val labels: List<LabelEntity>,
             val file: MediaEntity,
             val refs: List<LabelFileCrossRefEntity>,
-        ) : Success(uuid, isRefreshing, isProtecting, labels)
+        ) : Success(uuid, isRefreshing, isProtecting, protectProgress, labels)
     }
 
     data object Error : DetailsUiState

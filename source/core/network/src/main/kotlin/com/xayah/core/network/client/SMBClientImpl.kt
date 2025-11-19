@@ -195,7 +195,11 @@ class SMBClientImpl(private val entity: CloudEntity, private val extra: SMBExtra
         )
     }
 
-    override fun renameTo(src: String, dst: String): Unit = withDiskShare { diskShare ->
+    override fun renameTo(
+        src: String,
+        dst: String,
+        onProgress: ((currentPart: Int, totalParts: Int, currentFile: Int, totalFiles: Int) -> Unit)?
+    ): Unit = withDiskShare { diskShare ->
         log { "renameTo: from $src to $dst" }
         if (diskShare.folderExists(src)) {
             val dir = openOnRename(src)

@@ -80,7 +80,11 @@ class FTPClientImpl(private val entity: CloudEntity, private val extra: FTPExtra
         }
     }
 
-    override fun renameTo(src: String, dst: String) = withClient { client ->
+    override fun renameTo(
+        src: String,
+        dst: String,
+        onProgress: ((currentPart: Int, totalParts: Int, currentFile: Int, totalFiles: Int) -> Unit)?
+    ) = withClient { client ->
         log { "renameTo: from $src to $dst" }
         if (client.rename(src, dst).not()) throw IOException("Failed to rename file from $src to $dst.")
     }

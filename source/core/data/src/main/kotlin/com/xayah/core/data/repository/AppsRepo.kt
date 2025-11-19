@@ -56,6 +56,7 @@ import com.xayah.core.util.localBackupSaveDir
 import com.xayah.core.util.withLog
 import com.xayah.core.util.withMainContext
 import com.xayah.core.util.LogUtil
+import com.xayah.core.network.client.S3ClientImpl
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.Flow
@@ -762,10 +763,14 @@ class AppsRepo @Inject constructor(
         appsDao.upsert(app)
     }
 
-    suspend fun protectApp(cloudName: String?, app: PackageEntity) {
+    suspend fun protectApp(
+        cloudName: String?,
+        app: PackageEntity,
+        onProgress: ((currentPart: Int, totalParts: Int, currentFile: Int, totalFiles: Int) -> Unit)? = null
+    ) {
         if (cloudName.isNullOrEmpty().not()) {
             cloudName?.apply {
-                protectCloudApp(this, app)
+                protectCloudApp(this, app, onProgress)
             }
         } else {
             protectLocalApp(app)
@@ -783,10 +788,13 @@ class AppsRepo @Inject constructor(
         appsDao.update(protectedApp)
     }
 
-    private suspend fun protectCloudApp(cloudName: String, app: PackageEntity) = runCatching {
+    private suspend fun protectCloudApp(
+        cloudName: String,
+        app: PackageEntity,
+        onProgress: ((currentPart: Int, totalParts: Int, currentFile: Int, totalFiles: Int) -> Unit)? = null
+    ) = runCatching {
         cloudRepo.withClient(cloudName) { client, entity ->
-            val protectedApp =
-                app.copy(indexInfo = app.indexInfo.copy(preserveId = DateUtil.getTimestamp()))
+            val protectedApp = app.copy(indexInfo = app.indexInfo.copy(preserveId = DateUtil.getTimestamp()))
             val remote = entity.remote
             val remoteAppsDir = pathUtil.getCloudRemoteAppsDir(remote)
             val src = "${remoteAppsDir}/${app.archivesRelativeDir}"
@@ -796,7 +804,15 @@ class AppsRepo @Inject constructor(
             rootService.writeJson(data = protectedApp, dst = tmpJsonPath)
             cloudRepo.upload(client = client, src = tmpJsonPath, dstDir = src)
             rootService.deleteRecursively(tmpDir)
-            client.renameTo(src, dst)
+
+            // 使用带进度回调的 renameTo
+            if (client is S3ClientImpl) {
+                client.renameTo(src, dst) { currentPart, totalParts, currentFile, totalFiles ->
+                    onProgress?.invoke(currentPart, totalParts, currentFile, totalFiles)
+                }
+            } else {
+                client.renameTo(src, dst)
+            }
 
             // 添加数据库更新
             appsDao.update(protectedApp)

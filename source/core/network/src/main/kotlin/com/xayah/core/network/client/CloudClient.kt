@@ -17,7 +17,11 @@ interface CloudClient {
     fun disconnect()
     fun mkdir(dst: String)
     fun mkdirRecursively(dst: String)
-    fun renameTo(src: String, dst: String)
+    fun renameTo(
+        src: String,
+        dst: String,
+        onProgress: ((currentPart: Int, totalParts: Int, currentFile: Int, totalFiles: Int) -> Unit)? = null
+    )
     fun upload(src: String, dst: String, onUploading: (read: Long, total: Long) -> Unit)
     fun download(src: String, dst: String, onDownloading: (written: Long, total: Long) -> Unit)
     fun deleteFile(src: String)

@@ -49,6 +49,10 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.vectorResource
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.ui.unit.dp
+
 import com.xayah.core.model.OpType
 import com.xayah.core.model.database.LabelEntity
 import com.xayah.core.model.database.LabelFileCrossRefEntity
@@ -116,7 +120,16 @@ internal fun FileDetails(
 
         Spacer(Modifier.height(SizeTokens.Level12))
 
-        ActionsRow(opType = opType, blocked = file.extraInfo.blocked, protected = file.preserveId != 0L, onBlock = onBlock, onProtect = onProtect, onDelete = onDelete)
+        ActionsRow(
+            opType = opType,
+            blocked = file.extraInfo.blocked,
+            protected = file.preserveId != 0L,
+            isProtecting = uiState.isProtecting,  // 添加这一行
+            protectProgress = uiState.protectProgress,  // 添加这一行
+            onBlock = onBlock,
+            onProtect = onProtect,
+            onDelete = onDelete
+        )
 
         Spacer(Modifier.height(SizeTokens.Level12))
 
@@ -298,6 +311,8 @@ private fun ActionsRow(
     opType: OpType,
     blocked: Boolean,
     protected: Boolean,
+    isProtecting: Boolean = false,
+    protectProgress: String? = null,
     onBlock: (Boolean) -> Unit,
     onProtect: () -> Unit,
     onDelete: () -> Unit
@@ -315,7 +330,13 @@ private fun ActionsRow(
             }
 
             OpType.RESTORE -> {
-                RestoreActions(protected, onProtect, onDelete)
+                RestoreActions(
+                    protected = protected,
+                    isProtecting = isProtecting,
+                    protectProgress = protectProgress,
+                    onProtect = onProtect,
+                    onDelete = onDelete
+                )
             }
         }
     }
@@ -359,24 +380,65 @@ private fun SingleChoiceSegmentedButtonRowScope.BackupActions(blocked: Boolean, 
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SingleChoiceSegmentedButtonRowScope.RestoreActions(protected: Boolean, onProtect: () -> Unit, onDelete: () -> Unit) {
+private fun SingleChoiceSegmentedButtonRowScope.RestoreActions(
+    protected: Boolean,
+    isProtecting: Boolean = false,
+    protectProgress: String? = null,
+    onProtect: () -> Unit,
+    onDelete: () -> Unit
+) {
+    // 添加调试日志
+    android.util.Log.d("FileDetails", "RestoreActions: isProtecting=$isProtecting, protectProgress=$protectProgress")
     val context = LocalContext.current
     val dialogState = LocalSlotScope.current!!.dialogSlot
-    ActionItem(
-        enabled = protected.not(),
-        index = 0,
-        count = 2,
-        title = stringResource(R.string._protected),
-        icon = Icons.Outlined.Shield
-    ) {
-        dialogState.confirm(
-            title = context.getString(R.string.protect),
-            text = context.getString(R.string.protect_desc),
-            onConfirm = {
-                onProtect()
+
+    // 受保护按钮 - 使用 ActionSegmentedButton 直接控制内容
+    ActionSegmentedButton(
+        enabled = protected.not() && isProtecting.not(),
+        onClick = {
+            if (!isProtecting) {
+                dialogState.confirm(
+                    title = context.getString(R.string.protect),
+                    text = context.getString(R.string.protect_desc),
+                    onConfirm = onProtect
+                )
             }
-        )
+        },
+        containerColor = ThemedColorSchemeKeyTokens.SurfaceContainer.value,
+        index = 0,
+        count = 2
+    ) {
+        CompositionLocalProvider(
+            LocalContentColor provides LocalContentColor.current.withState(protected.not() && isProtecting.not())
+        ) {
+            Column(
+                modifier = Modifier.paddingVertical(SizeTokens.Level8),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(imageVector = Icons.Outlined.Shield, contentDescription = null)
+
+                // 根据状态显示不同内容
+                when {
+                    isProtecting && protectProgress != null -> {
+                        Text(
+                            text = protectProgress,
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                    isProtecting -> {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                    else -> {
+                        Text(text = stringResource(R.string._protected))
+                    }
+                }
+            }
+        }
     }
+
+    // 删除按钮保持不变
     ActionItem(
         index = 1,
         count = 2,
@@ -387,9 +449,7 @@ private fun SingleChoiceSegmentedButtonRowScope.RestoreActions(protected: Boolea
         dialogState.confirm(
             title = context.getString(R.string.delete),
             text = context.getString(R.string.delete_desc),
-            onConfirm = {
-                onDelete()
-            }
+            onConfirm = onDelete
         )
     }
 }

@@ -92,7 +92,11 @@ class WebDAVClientImpl(private val entity: CloudEntity, private val extra: WebDA
         }
     }
 
-    override fun renameTo(src: String, dst: String) = withClient { client ->
+    override fun renameTo(
+        src: String,
+        dst: String,
+        onProgress: ((currentPart: Int, totalParts: Int, currentFile: Int, totalFiles: Int) -> Unit)?
+    ) = withClient { client ->
         log { "renameTo: from ${getPath(src)} to ${getPath(dst)}" }
         client.move(getPath(src), getPath(dst), false)
     }

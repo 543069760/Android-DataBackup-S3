@@ -32,6 +32,7 @@ import androidx.compose.material.icons.rounded.RemoveRedEye
 import androidx.compose.material.icons.rounded.RocketLaunch
 import androidx.compose.material.icons.rounded.Update
 import androidx.compose.material.icons.rounded._123
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -136,9 +137,10 @@ internal fun AppDetails(
         ActionsRow(
             opType = opType,
             blocked = app.extraInfo.blocked,
-            frozen = app.extraInfo.enabled.not(),
+            frozen = app.extraInfo.enabled.not(),  // 添加这一行
             protected = app.preserveId != 0L,
-            isProtecting = uiState.isProtecting,  // 传递状态
+            isProtecting = uiState.isProtecting,
+            protectProgress = uiState.protectProgress,  // 如果您添加了这个参数
             onBlock = onBlock,
             onFreeze = onFreeze,
             onLaunch = onLaunch,
@@ -365,7 +367,8 @@ private fun ActionsRow(
     blocked: Boolean,
     frozen: Boolean,
     protected: Boolean,
-    isProtecting: Boolean,  // 添加这个参数
+    isProtecting: Boolean,
+    protectProgress: String? = null,  // 添加这个参数
     onBlock: (Boolean) -> Unit,
     onFreeze: (Boolean) -> Unit,
     onLaunch: () -> Unit,
@@ -385,7 +388,7 @@ private fun ActionsRow(
             }
 
             OpType.RESTORE -> {
-                RestoreActions(protected, isProtecting, onProtect, onDelete)  // 传递参数
+                RestoreActions(protected, isProtecting, protectProgress, onProtect, onDelete) // 传递参数
             }
         }
     }
@@ -440,27 +443,53 @@ private fun SingleChoiceSegmentedButtonRowScope.BackupActions(blocked: Boolean, 
 private fun SingleChoiceSegmentedButtonRowScope.RestoreActions(
     protected: Boolean,
     isProtecting: Boolean,
+    protectProgress: String?,
     onProtect: () -> Unit,
     onDelete: () -> Unit
 ) {
     val context = LocalContext.current
     val dialogState = LocalSlotScope.current!!.dialogSlot
-    ActionItem(
-        enabled = protected.not(),
-        isLoading = isProtecting,
+
+    // "受保护"按钮
+    ActionSegmentedButton(
+        enabled = protected.not() && isProtecting.not(),
+        onClick = {
+            dialogState.confirm(
+                title = context.getString(R.string.protect),
+                text = context.getString(R.string.protect_desc),
+                onConfirm = onProtect
+            )
+        },
+        containerColor = ThemedColorSchemeKeyTokens.SurfaceContainer.value,  // 添加这一行
         index = 0,
-        count = 2,
-        title = stringResource(R.string._protected),
-        icon = Icons.Outlined.Shield
+        count = 2
     ) {
-        dialogState.confirm(
-            title = context.getString(R.string.protect),
-            text = context.getString(R.string.protect_desc),
-            onConfirm = {
-                onProtect()
+        CompositionLocalProvider(LocalContentColor provides LocalContentColor.current.withState(protected.not() && isProtecting.not())) {
+            Column(modifier = Modifier.paddingVertical(SizeTokens.Level8), horizontalAlignment = Alignment.CenterHorizontally) {
+                when {
+                    protectProgress != null -> {
+                        Text(
+                            text = protectProgress,
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                    }
+                    isProtecting -> {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.dp,
+                            strokeCap = StrokeCap.Round
+                        )
+                    }
+                    else -> {
+                        Icon(imageVector = Icons.Outlined.Shield, contentDescription = null)
+                    }
+                }
+                Text(text = stringResource(R.string._protected))
             }
-        )
+        }
     }
+
+    // "删除"按钮保持不变
     ActionItem(
         index = 1,
         count = 2,
@@ -471,9 +500,7 @@ private fun SingleChoiceSegmentedButtonRowScope.RestoreActions(
         dialogState.confirm(
             title = context.getString(R.string.delete),
             text = context.getString(R.string.delete_desc),
-            onConfirm = {
-                onDelete()
-            }
+            onConfirm = onDelete
         )
     }
 }
