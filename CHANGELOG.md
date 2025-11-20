@@ -1,3 +1,65 @@
+## 2025-11-20
+feat: 实现基于时间戳的备份机制以支持多版本备份
+## 核心变更
+
+### 数据模型层
+- 为 PackageEntity 和 MediaEntity 添加 backupTimestamp 字段
+- 为 PackageExtraInfo 和 MediaExtraInfo 添加 isProtected 字段
+- 更新 archivesRelativeDir 属性以使用时间戳格式(包名/user_用户ID@时间戳)
+- 更新 asExternalModel() 方法以映射新字段到 UI 模型
+
+### 数据库层
+- 创建 MIGRATION_7_8 迁移脚本,添加 indexInfo_backupTimestamp 和 extraInfo_isProtected 列
+- 更新 PackageDao 和 MediaDao 查询方法,将 backupTimestamp 作为唯一性判断条件
+- 添加 queryByPreserveId 方法以保持向后兼容性
+- 将数据库版本从 7 升级到 8
+
+### 数据仓库层
+- 实现 parseTimestampAndUserId 方法从路径中解析时间戳
+- 更新 loadLocalApps/loadCloudApps 和 loadLocalFiles/loadCloudFiles 方法以支持时间戳
+- 简化受保护功能:从文件复制改为标记(使用 isProtected 字段)
+- 修正所有数据库查询调用以包含 backupTimestamp 参数
+
+### 备份服务层
+- 在 onInitializing() 中生成统一的备份时间戳
+- 实现 onCleanupFailedBackup() 方法以清理失败的备份
+- 更新备份逻辑以使用带时间戳的目录结构
+- 在备份失败时自动调用清理逻辑
+
+### UI 层
+- 更新 ListItems.kt 以显示 3 行布局(应用名称/包名/备份时间)
+- 仅在恢复模式(OpType.RESTORE)下显示时间戳
+- 使用 isProtected 字段而非 preserveId 显示受保护图标
+- 更新 AppDetails.kt 以正确显示受保护状态和备份时间
+
+## 功能特性  （***重大功能更新***）
+
+- ✅ 支持同一应用/文件的多个时间点备份共存
+- ✅ 在恢复列表中显示所有历史备份
+- ✅ 备份失败时自动清理部分上传的文件
+- ✅ 向后兼容旧的备份数据(无时间戳)
+- ✅ 受保护功能简化为标记而非文件复制
+- 
+## 2025-11-20
+
+**实现 S3 分块复制和受保护操作进度显示**
+
+1. 修改简单 copy 为分块 copy
+    - 在 S3ClientImpl.renameTo() 中实现指数级增长的分块复制策略
+    - 使用 listObjectsV2 列出目录下所有对象
+    - 对每个文件计算最优分块大小(最多 10000 个分块,每块最大 5GB)
+    - 使用 uploadPartCopy 执行分块复制,支持大文件传输
+    - 添加自动重试机制(最多 3 次)
+    - 使用批量删除 API 清理源对象
+
+2. 修改受保护操作展示分块进度
+    - 在 DetailsViewModel 中添加 isProtecting 和 protectProgress 状态
+    - 在 AppsRepo 和 FilesRepo 中添加 onProgress 回调参数
+    - 实现完整的进度回调链路:S3ClientImpl → Repository → ViewModel → UI
+    - 在 AppDetails 和 FileDetails 中实现进度文本显示(如 "1/50")
+    - 使用 ActionSegmentedButton 自定义按钮内容,支持动态切换显示
+    - 保持按钮布局和背景颜色与其他操作按钮一致
+
 ## 2025-11-17
 
 **修复云端重载数据一致性**
