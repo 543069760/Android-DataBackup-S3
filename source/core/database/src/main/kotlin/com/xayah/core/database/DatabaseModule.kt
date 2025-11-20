@@ -23,6 +23,7 @@ object DatabaseModule {
     fun provideDatabase(@ApplicationContext context: Context): AppDatabase =
         Room.databaseBuilder(context, AppDatabase::class.java, "database-databackup")
             .enableMultiInstanceInvalidation()
+            .addMigrations(DatabaseMigrations.MIGRATION_7_8)  // 添加这一行
             .build()
 
     @Provides

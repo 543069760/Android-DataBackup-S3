@@ -22,11 +22,13 @@ interface PackageDao {
 
     @Query(
         "SELECT * FROM PackageEntity WHERE" +
-                " indexInfo_packageName = :packageName AND indexInfo_opType = :opType AND indexInfo_userId = :userId AND indexInfo_preserveId = :preserveId" +
+                " indexInfo_packageName = :packageName AND indexInfo_opType = :opType AND indexInfo_userId = :userId" +
+                " AND indexInfo_compressionType = :ct" +
                 " AND indexInfo_cloud = :cloud AND indexInfo_backupDir = :backupDir" +
+                " AND indexInfo_backupTimestamp = :backupTimestamp" +
                 " LIMIT 1"
     )
-    suspend fun query(packageName: String, opType: OpType, userId: Int, preserveId: Long, cloud: String, backupDir: String): PackageEntity?
+    suspend fun query(packageName: String, opType: OpType, userId: Int, ct: CompressionType, cloud: String, backupDir: String, backupTimestamp: Long): PackageEntity?
 
     @Query(
         "SELECT * FROM PackageEntity WHERE" +
@@ -71,11 +73,11 @@ interface PackageDao {
 
     @Query(
         "SELECT * FROM PackageEntity WHERE" +
-                " indexInfo_packageName = :packageName AND indexInfo_opType = :opType AND indexInfo_userId = :userId AND indexInfo_preserveId = :preserveId AND indexInfo_compressionType = :ct" +
+                " indexInfo_packageName = :packageName AND indexInfo_opType = :opType AND indexInfo_userId = :userId AND indexInfo_preserveId = :preserveId" +
                 " AND indexInfo_cloud = :cloud AND indexInfo_backupDir = :backupDir" +
                 " LIMIT 1"
     )
-    suspend fun query(packageName: String, opType: OpType, userId: Int, preserveId: Long, ct: CompressionType, cloud: String, backupDir: String): PackageEntity?
+    suspend fun queryByPreserveId(packageName: String, opType: OpType, userId: Int, preserveId: Long, cloud: String, backupDir: String): PackageEntity?
 
     @Query("SELECT * FROM PackageEntity WHERE extraInfo_activated = 1 AND indexInfo_opType = :opType")
     suspend fun queryActivated(opType: OpType): List<PackageEntity>
@@ -133,10 +135,11 @@ interface PackageDao {
 
     @Query(
         "SELECT * FROM PackageEntity WHERE" +
-                " indexInfo_packageName = :packageName AND indexInfo_opType = :opType AND indexInfo_userId = :userId AND indexInfo_preserveId = :preserveId" +
+                " indexInfo_packageName = :packageName AND indexInfo_opType = :opType AND indexInfo_userId = :userId" +
+                " AND indexInfo_backupTimestamp = :backupTimestamp" +
                 " LIMIT 1"
     )
-    fun queryFlow(packageName: String, opType: OpType, userId: Int, preserveId: Long): Flow<PackageEntity?>
+    fun queryFlow(packageName: String, opType: OpType, userId: Int, backupTimestamp: Long): Flow<PackageEntity?>
 
     @Query(
         "SELECT COUNT(*) FROM PackageEntity WHERE" +

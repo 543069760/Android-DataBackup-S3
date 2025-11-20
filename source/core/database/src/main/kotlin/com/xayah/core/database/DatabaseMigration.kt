@@ -4,6 +4,8 @@ import androidx.room.DeleteColumn
 import androidx.room.DeleteTable
 import androidx.room.RenameColumn
 import androidx.room.migration.AutoMigrationSpec
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 object DatabaseMigrations {
     @RenameColumn(
@@ -230,4 +232,28 @@ object DatabaseMigrations {
         columnName = "mediaEntity_extraInfo_labels"
     )
     class Schema5to6 : AutoMigrationSpec
+
+    val MIGRATION_7_8 = object : Migration(7, 8) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            // 添加 backupTimestamp 列到 PackageEntity
+            database.execSQL(
+                "ALTER TABLE PackageEntity ADD COLUMN indexInfo_backupTimestamp INTEGER NOT NULL DEFAULT 0"
+            )
+
+            // 添加 isProtected 列到 PackageEntity
+            database.execSQL(
+                "ALTER TABLE PackageEntity ADD COLUMN extraInfo_isProtected INTEGER NOT NULL DEFAULT 0"
+            )
+
+            // 添加 backupTimestamp 列到 MediaEntity
+            database.execSQL(
+                "ALTER TABLE MediaEntity ADD COLUMN indexInfo_backupTimestamp INTEGER NOT NULL DEFAULT 0"
+            )
+
+            // 添加 isProtected 列到 MediaEntity
+            database.execSQL(
+                "ALTER TABLE MediaEntity ADD COLUMN extraInfo_isProtected INTEGER NOT NULL DEFAULT 0"
+            )
+        }
+    }
 }

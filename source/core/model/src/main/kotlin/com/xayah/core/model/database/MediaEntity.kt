@@ -17,6 +17,7 @@ data class MediaIndexInfo(
     var preserveId: Long,
     var cloud: String,
     var backupDir: String,
+    var backupTimestamp: Long = 0L,  // 新增字段
 )
 
 @Serializable
@@ -32,6 +33,7 @@ data class MediaExtraInfo(
     var blocked: Boolean,
     var activated: Boolean,
     var existed: Boolean,
+    @ColumnInfo(defaultValue = "0") var isProtected: Boolean = false,  // 新增字段
 )
 
 @Serializable
@@ -58,7 +60,14 @@ data class MediaEntity(
         get() = mediaInfo.displayBytes.toDouble()
 
     val archivesRelativeDir: String
-        get() = "${indexInfo.name}${if (preserveId == 0L) "" else "@$preserveId"}"
+        get() {
+            return if (indexInfo.backupTimestamp > 0L) {
+                "${indexInfo.name}@${indexInfo.backupTimestamp}"
+            } else {
+                // 向后兼容旧格式
+                if (preserveId != 0L) "${indexInfo.name}@${preserveId}" else indexInfo.name
+            }
+        }
 
     val existed: Boolean
         get() = extraInfo.existed
@@ -72,5 +81,7 @@ fun MediaEntity.asExternalModel() = File(
     name = name,
     path = path,
     preserveId = preserveId,
-    selected = extraInfo.activated
+    selected = extraInfo.activated,
+    backupTimestamp = indexInfo.backupTimestamp,  // 新增
+    isProtected = extraInfo.isProtected  // 新增
 )

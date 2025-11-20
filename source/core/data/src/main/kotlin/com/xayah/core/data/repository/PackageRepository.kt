@@ -1097,14 +1097,15 @@ class PackageRepository @Inject constructor(
                             }.withLog()
                         }
 
-                        // 关键修复:在 upsert 之前查询现有记录,避免重复插入
+                        // 使用新的时间戳查询方法
                         val existingApp = packageDao.query(
-                            packageName = packageEntity.packageName, // 这里修复了 packageName 引用
+                            packageName = packageEntity.packageName,
                             opType = OpType.RESTORE,
                             userId = packageEntity.indexInfo.userId,
-                            preserveId = packageEntity.indexInfo.preserveId,
+                            ct = packageEntity.indexInfo.compressionType,
                             cloud = cloud,
-                            backupDir = cloudEntity.remote
+                            backupDir = cloudEntity.remote,
+                            backupTimestamp = packageEntity.indexInfo.backupTimestamp  // 使用时间戳
                         )
 
                         if (existingApp != null) {

@@ -88,6 +88,7 @@ data class PackageExtraInfo(
     var activated: Boolean,
     @ColumnInfo(defaultValue = "1") var firstUpdated: Boolean,
     @ColumnInfo(defaultValue = "1") var enabled: Boolean,
+    @ColumnInfo(defaultValue = "0") var isProtected: Boolean = false,  // 新增字段
 )
 
 @Serializable
@@ -165,6 +166,7 @@ data class PackageIndexInfo(
     var preserveId: Long,
     var cloud: String,
     var backupDir: String,
+    var backupTimestamp: Long = 0L,  // 新增字段
 )
 
 @Serializable
@@ -258,7 +260,15 @@ data class PackageEntity(
         get() = (packageInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
 
     val archivesRelativeDir: String
-        get() = "${packageName}/user_${userId}${if (preserveId == 0L) "" else "@$preserveId"}"
+        get() {
+            val baseDir = "${packageName}/user_${userId}"
+            return if (indexInfo.backupTimestamp > 0L) {
+                "${baseDir}@${indexInfo.backupTimestamp}"
+            } else {
+                // 向后兼容旧格式
+                if (preserveId != 0L) "${baseDir}@${preserveId}" else baseDir
+            }
+        }
 
     val pkgUserKey: String
         get() = "${packageName}-${userId}"
@@ -272,7 +282,9 @@ fun PackageEntity.asExternalModel() = App(
     preserveId = preserveId,
     isSystemApp = isSystemApp,
     selectionFlag = selectionFlag,
-    selected = extraInfo.activated
+    selected = extraInfo.activated,
+    backupTimestamp = indexInfo.backupTimestamp,  // 新增
+    isProtected = extraInfo.isProtected  // 新增
 )
 
 // Part update entity

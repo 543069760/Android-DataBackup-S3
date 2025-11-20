@@ -95,6 +95,18 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
         mCloudRepo.upload(client = mClient, src = path, dstDir = getRemoteFileDir(archivesRelativeDir))
     }
 
+    override suspend fun onCleanupFailedBackup(archivesRelativeDir: String) {
+        val remoteFileDir = getRemoteFileDir(archivesRelativeDir)
+        log { "Cleaning up failed backup at: $remoteFileDir" }
+        runCatching {
+            mClient.deleteRecursively(remoteFileDir)
+        }.onSuccess {
+            log { "Successfully cleaned up: $remoteFileDir" }
+        }.onFailure { e ->
+            log { "Failed to cleanup: ${e.message}" }
+        }
+    }
+
     override suspend fun onItselfSaved(path: String, entity: ProcessingInfoEntity) {
         entity.update(state = OperationState.UPLOADING)
         var flag = true

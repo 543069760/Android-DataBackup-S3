@@ -6,4 +6,6 @@ data class File(
     val path: String,
     val preserveId: Long,
     val selected: Boolean,
+    val backupTimestamp: Long = 0L,  // 新增
+    val isProtected: Boolean = false  // 新增
 )

@@ -73,8 +73,11 @@ internal abstract class AbstractBackupService : AbstractPackagesService() {
 
     @SuppressLint("StringFormatInvalid")
     override suspend fun onInitializing() {
+        // 生成本次备份的统一时间戳
+        val backupTimestamp = DateUtil.getTimestamp()
         val packages = mPackageRepo.queryActivated(OpType.BACKUP)
         packages.forEach { pkg ->
+            pkg.indexInfo.backupTimestamp = backupTimestamp
             mPkgEntities.add(
                 TaskDetailPackageEntity(
                     taskId = mTaskEntity.id,
@@ -155,7 +158,15 @@ internal abstract class AbstractBackupService : AbstractPackagesService() {
                 pkg.update(state = OperationState.PROCESSING)
                 val p = pkg.packageEntity
                 val dstDir = "${mAppsDir}/${p.archivesRelativeDir}"
-                var restoreEntity = mPackageDao.query(p.packageName, OpType.RESTORE, p.userId, p.preserveId, p.indexInfo.compressionType, mTaskEntity.cloud, mTaskEntity.backupDir)
+                var restoreEntity = mPackageDao.query(
+                    p.packageName,
+                    OpType.RESTORE,
+                    p.userId,
+                    p.indexInfo.compressionType,  // 修正
+                    mTaskEntity.cloud,  // 修正
+                    mTaskEntity.backupDir,  // 修正
+                    p.indexInfo.backupTimestamp  // 修正
+                )
                 mRootService.mkdirs(dstDir)
                 if (onAppDirCreated(archivesRelativeDir = p.archivesRelativeDir)) {
                     backup(type = DataType.PACKAGE_APK, p = p, r = restoreEntity, t = pkg, dstDir = dstDir)

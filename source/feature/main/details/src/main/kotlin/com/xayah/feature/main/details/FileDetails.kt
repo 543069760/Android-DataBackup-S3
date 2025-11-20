@@ -123,7 +123,7 @@ internal fun FileDetails(
         ActionsRow(
             opType = opType,
             blocked = file.extraInfo.blocked,
-            protected = file.preserveId != 0L,
+            protected = file.extraInfo.isProtected,
             isProtecting = uiState.isProtecting,  // 添加这一行
             protectProgress = uiState.protectProgress,  // 添加这一行
             onBlock = onBlock,
@@ -160,7 +160,7 @@ private fun LabelsFlow(opType: OpType, file: MediaEntity, refs: List<LabelFileCr
             }
 
             OpType.RESTORE -> {
-                if (file.preserveId != 0L) {
+                if (file.extraInfo.isProtected) {
                     FilterChip(
                         onClick = { },
                         selected = true,

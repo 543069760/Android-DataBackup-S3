@@ -19,6 +19,23 @@ interface MediaDao {
     suspend fun upsert(item: MediaEntity)
 
     @Query(
+        "SELECT * FROM MediaEntity" +
+                " WHERE indexInfo_opType = :opType AND indexInfo_name = :name" +
+                " AND indexInfo_compressionType = :ct" +
+                " AND indexInfo_cloud = :cloud AND indexInfo_backupDir = :backupDir" +
+                " AND indexInfo_backupTimestamp = :backupTimestamp" +
+                " LIMIT 1"
+    )
+    suspend fun query(
+        opType: OpType,
+        name: String,
+        ct: CompressionType,
+        cloud: String,
+        backupDir: String,
+        backupTimestamp: Long
+    ): MediaEntity?
+
+    @Query(
         "SELECT * FROM MediaEntity WHERE" +
                 " indexInfo_opType = :opType AND extraInfo_blocked = :blocked"
     )

@@ -92,7 +92,8 @@ fun LazyListScope.listItems(
                         id = item.id,
                         packageName = item.packageName,
                         label = item.label,
-                        preserveId = item.preserveId,
+                        backupTimestamp = item.backupTimestamp,
+                        isProtected = item.isProtected,
                         flag = item.selectionFlag,
                         selected = item.selected,
                         onClick = {
@@ -110,10 +111,12 @@ fun LazyListScope.listItems(
                 val navController = LocalNavController.current!!
                 Row(modifier = Modifier.animateItemPlacement()) {
                     FileItem(
+                        opType = uiState.opType,
                         id = item.id,
                         name = item.name,
                         path = item.path,
-                        preserveId = item.preserveId,
+                        backupTimestamp = item.backupTimestamp,
+                        isProtected = item.isProtected,
                         selected = item.selected,
                         onClick = {
                             navController.navigateSingle(MainRoutes.Details.getRoute(Target.Files, uiState.opType, item.id))
@@ -135,7 +138,8 @@ fun AppItem(
     id: Long,
     packageName: String,
     label: String,
-    preserveId: Long,
+    backupTimestamp: Long,
+    isProtected: Boolean,
     flag: Int,
     selected: Boolean,
     onChangeFlag: (Long, Int) -> Unit,
@@ -153,12 +157,34 @@ fun AppItem(
             PackageIconImage(packageName = packageName, size = SizeTokens.Level32)
 
             Column(modifier = Modifier.weight(1f)) {
-                TitleLargeText(text = label.ifEmpty { stringResource(id = R.string.unknown) }, maxLines = 1)
-                BodyMediumText(text = packageName, color = ThemedColorSchemeKeyTokens.Outline.value, maxLines = 1)
+                // 第1行: APP名称(不包含时间戳)
+                TitleLargeText(
+                    text = label.ifEmpty { stringResource(id = R.string.unknown) },
+                    maxLines = 1
+                )
+
+                // 第2行: 包名
+                BodyMediumText(
+                    text = packageName,
+                    color = ThemedColorSchemeKeyTokens.Outline.value,
+                    maxLines = 1
+                )
+
+                // 第3行: 备份时间戳(仅在恢复模式且有时间戳时显示)
+                if (opType == OpType.RESTORE && backupTimestamp > 0L) {
+                    BodyMediumText(
+                        text = com.xayah.core.util.DateUtil.formatTimestamp(
+                            backupTimestamp,
+                            com.xayah.core.util.DateUtil.PATTERN_YMD_HMS
+                        ),
+                        color = ThemedColorSchemeKeyTokens.Outline.value,
+                        maxLines = 1
+                    )
+                }
             }
 
             Row(modifier = Modifier.height(IntrinsicSize.Min)) {
-                if (preserveId != 0L) {
+                if (isProtected) {
                     Icon(modifier = Modifier.fillMaxHeight(), imageVector = Icons.Outlined.Shield, contentDescription = null)
                 }
                 AnimatedDataIndicator(flag) {
@@ -179,10 +205,12 @@ fun AppItem(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun FileItem(
+    opType: OpType,
     id: Long,
     name: String,
     path: String,
-    preserveId: Long,
+    backupTimestamp: Long,
+    isProtected: Boolean,
     selected: Boolean,
     onSelectedChanged: (Long, Boolean) -> Unit,
     onClick: () -> Unit,
@@ -198,12 +226,34 @@ fun FileItem(
             PackageIconImage(icon = Icons.Rounded.Folder, packageName = "", inCircleShape = true, size = SizeTokens.Level32)
 
             Column(modifier = Modifier.weight(1f)) {
-                TitleLargeText(text = name.ifEmpty { stringResource(id = R.string.unknown) }, maxLines = 1)
-                BodyMediumText(text = path, color = ThemedColorSchemeKeyTokens.Outline.value, maxLines = 1)
+                // 第1行: 文件名称(不包含时间戳)
+                TitleLargeText(
+                    text = name.ifEmpty { stringResource(id = R.string.unknown) },
+                    maxLines = 1
+                )
+
+                // 第2行: 路径
+                BodyMediumText(
+                    text = path,
+                    color = ThemedColorSchemeKeyTokens.Outline.value,
+                    maxLines = 1
+                )
+
+                // 第3行: 备份时间戳(仅在恢复模式且有时间戳时显示)
+                if (opType == OpType.RESTORE && backupTimestamp > 0L) {
+                    BodyMediumText(
+                        text = com.xayah.core.util.DateUtil.formatTimestamp(
+                            backupTimestamp,
+                            com.xayah.core.util.DateUtil.PATTERN_YMD_HMS
+                        ),
+                        color = ThemedColorSchemeKeyTokens.Outline.value,
+                        maxLines = 1
+                    )
+                }
             }
 
             Row(modifier = Modifier.height(IntrinsicSize.Min)) {
-                if (preserveId != 0L) {
+                if (isProtected) {
                     Icon(modifier = Modifier.fillMaxHeight(), imageVector = Icons.Outlined.Shield, contentDescription = null)
                 }
             }

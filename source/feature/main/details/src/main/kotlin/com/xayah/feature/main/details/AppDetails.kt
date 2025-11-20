@@ -128,7 +128,12 @@ internal fun AppDetails(
 
         Spacer(Modifier.height(SizeTokens.Level12))
 
-        HeadlineMediumText(text = app.packageInfo.label, color = ThemedColorSchemeKeyTokens.OnSurface.value)
+        val displayName = if (app.indexInfo.backupTimestamp > 0L) {
+            "${app.packageInfo.label} (${DateUtil.formatTimestamp(app.indexInfo.backupTimestamp, DateUtil.PATTERN_YMD_HMS)})"
+        } else {
+            app.packageInfo.label
+        }
+        HeadlineMediumText(text = displayName, color = ThemedColorSchemeKeyTokens.OnSurface.value)
         BodyLargeText(text = app.packageName, color = ThemedColorSchemeKeyTokens.OnSurfaceVariant.value)
         LabelsFlow(opType = opType, app = app, refs = uiState.refs) { isShow = true }
 
@@ -138,7 +143,7 @@ internal fun AppDetails(
             opType = opType,
             blocked = app.extraInfo.blocked,
             frozen = app.extraInfo.enabled.not(),  // 添加这一行
-            protected = app.preserveId != 0L,
+            protected = app.extraInfo.isProtected,
             isProtecting = uiState.isProtecting,
             protectProgress = uiState.protectProgress,  // 如果您添加了这个参数
             onBlock = onBlock,
@@ -189,7 +194,7 @@ private fun LabelsFlow(opType: OpType, app: PackageEntity, refs: List<LabelAppCr
             }
 
             OpType.RESTORE -> {
-                if (app.preserveId != 0L) {
+                if (app.extraInfo.isProtected) {
                     FilterChip(
                         onClick = { },
                         selected = true,
@@ -294,7 +299,7 @@ private fun LabelsBottomSheet(
                                         .matchParentSize()
                                         .combinedClickable(
                                             onLongClick = { expanded = true },
-                                            onClick = { onSelectLabel(selected, LabelAppCrossRefEntity(item.label, app.packageName, app.userId, app.preserveId)) },
+                                            onClick = { onSelectLabel(selected, LabelAppCrossRefEntity(item.label, app.packageName, app.userId, 0L)) },
                                             interactionSource = interactionSource,
                                             indication = null,
                                         )
@@ -562,11 +567,11 @@ private fun Info(app: PackageEntity) {
                 value = app.extraInfo.ssaid,
             )
         }
-        if (app.preserveId != 0L) {
+        if (app.extraInfo.isProtected && app.indexInfo.backupTimestamp != 0L) {
             Clickable(
                 icon = Icons.Outlined.Shield,
                 title = stringResource(id = R.string._protected),
-                value = DateUtil.formatTimestamp(app.preserveId, DateUtil.PATTERN_FINISH),
+                value = DateUtil.formatTimestamp(app.indexInfo.backupTimestamp, DateUtil.PATTERN_FINISH),
             )
         }
     }

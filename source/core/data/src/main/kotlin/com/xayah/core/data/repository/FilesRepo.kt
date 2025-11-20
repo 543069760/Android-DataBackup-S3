@@ -184,14 +184,43 @@ class FilesRepo @Inject constructor(
                         m?.extraInfo?.activated = false
                         m?.indexInfo?.cloud = ""
                         m?.indexInfo?.backupDir = context.localBackupSaveDir()
+
+                        // 解析路径中的时间戳
+                        val parentPath = PathUtil.getParentPath(pathParcelable.pathString)
+                        val dirName = PathUtil.getFileName(parentPath)
+                        val timestamp = parseTimestampFromPath(dirName)
+
+                        if (timestamp > 0L) {
+                            m?.indexInfo?.backupTimestamp = timestamp
+                            m?.indexInfo?.preserveId = 0L
+                        }
                     }?.apply {
-                        if (filesDao.query(indexInfo.opType, preserveId, name, indexInfo.compressionType, indexInfo.cloud, indexInfo.backupDir) == null) {
+                        // 使用新的查询方法,包含 backupTimestamp
+                        if (filesDao.query(
+                                indexInfo.opType,
+                                name,
+                                indexInfo.compressionType,
+                                indexInfo.cloud,
+                                indexInfo.backupDir,
+                                indexInfo.backupTimestamp
+                            ) == null) {
                             filesDao.upsert(this)
                         }
                     }
                 }
             }
         }
+    }
+
+    // 添加辅助方法解析时间戳
+    private fun parseTimestampFromPath(dirName: String): Long {
+        return runCatching {
+            if (dirName.contains("@")) {
+                dirName.substringAfter("@").toLongOrNull() ?: 0L
+            } else {
+                0L
+            }
+        }.getOrDefault(0L)
     }
 
     private suspend fun loadCloudFiles(cloud: String, onLoad: suspend (cur: Int, max: Int, content: String) -> Unit) = runCatching {
@@ -207,14 +236,32 @@ class FilesRepo @Inject constructor(
                     if (fileName == ConfigsMediaRestoreName) {
                         runCatching {
                             cloudRepo.download(client = client, src = pathParcelable.pathString, dstDir = tmpDir) { path ->
-                                val stored = rootService.readJson<MediaEntity>(path).also { p ->
-                                    p?.id = 0
-                                    p?.extraInfo?.existed = true
-                                    p?.extraInfo?.activated = false
-                                    p?.indexInfo?.cloud = entity.name
-                                    p?.indexInfo?.backupDir = remote
+                                rootService.readJson<MediaEntity>(path).also { m ->
+                                    m?.id = 0
+                                    m?.extraInfo?.existed = true
+                                    m?.extraInfo?.activated = false
+                                    m?.indexInfo?.cloud = entity.name
+                                    m?.indexInfo?.backupDir = remote
+
+                                    // 解析路径中的时间戳
+                                    val parentPath = PathUtil.getParentPath(pathParcelable.pathString)
+                                    val dirName = PathUtil.getFileName(parentPath)
+                                    val timestamp = parseTimestampFromPath(dirName)
+
+                                    if (timestamp > 0L) {
+                                        m?.indexInfo?.backupTimestamp = timestamp
+                                        m?.indexInfo?.preserveId = 0L
+                                    }
                                 }?.apply {
-                                    if (filesDao.query(indexInfo.opType, preserveId, name, indexInfo.compressionType, indexInfo.cloud, indexInfo.backupDir) == null) {
+                                    // 使用新的查询方法,包含 backupTimestamp
+                                    if (filesDao.query(
+                                            indexInfo.opType,
+                                            name,
+                                            indexInfo.compressionType,
+                                            indexInfo.cloud,
+                                            indexInfo.backupDir,
+                                            indexInfo.backupTimestamp
+                                        ) == null) {
                                         filesDao.upsert(this)
                                     }
                                 }
@@ -249,7 +296,14 @@ class FilesRepo @Inject constructor(
                 files.forEach {
                     if (it.name == name && it.path != pathString) name = renameDuplicateFile(name)
                 }
-                val exists = filesDao.query(opType = OpType.BACKUP, preserveId = 0, name = name, cloud = "", backupDir = "") != null
+                val exists = filesDao.query(
+                    opType = OpType.BACKUP,
+                    name = name,
+                    ct = CompressionType.TAR,
+                    cloud = "",
+                    backupDir = "",
+                    backupTimestamp = 0L
+                ) != null
                 if (exists) {
                     failure++
                     log { "$name:${pathString} has already existed." }
@@ -336,12 +390,7 @@ class FilesRepo @Inject constructor(
     }
 
     private suspend fun protectLocalFile(file: MediaEntity) {
-        val protectedFile = file.copy(indexInfo = file.indexInfo.copy(preserveId = DateUtil.getTimestamp()))
-        val fileDir = pathUtil.getLocalBackupFilesDir()
-        val src = "${fileDir}/${file.archivesRelativeDir}"
-        val dst = "${fileDir}/${protectedFile.archivesRelativeDir}"
-        rootService.writeJson(data = protectedFile, dst = PathUtil.getMediaRestoreConfigDst(src))
-        rootService.renameTo(src, dst)
+        val protectedFile = file.copy(extraInfo = file.extraInfo.copy(isProtected = true))
         filesDao.update(protectedFile)
     }
 
@@ -350,48 +399,8 @@ class FilesRepo @Inject constructor(
         file: MediaEntity,
         onProgress: ((currentPart: Int, totalParts: Int, currentFile: Int, totalFiles: Int) -> Unit)? = null
     ) = runCatching {
-        log { "Starting protectCloudFile for: ${file.name}" }
-        log { "onProgress callback is ${if (onProgress == null) "NULL" else "NOT NULL"}" }
-        cloudRepo.withClient(cloudName) { client, entity ->
-            val protectedFile = file.copy(indexInfo = file.indexInfo.copy(preserveId = DateUtil.getTimestamp()))
-            val remote = entity.remote
-            val remoteFilesDir = pathUtil.getCloudRemoteFilesDir(remote)
-            val src = "${remoteFilesDir}/${file.archivesRelativeDir}"
-            val dst = "${remoteFilesDir}/${protectedFile.archivesRelativeDir}"
-
-            log { "Source: $src, Destination: $dst" }
-
-            val tmpDir = pathUtil.getCloudTmpDir()
-            val tmpJsonPath = PathUtil.getMediaRestoreConfigDst(tmpDir)
-            rootService.writeJson(data = protectedFile, dst = tmpJsonPath)
-
-            log { "Uploading config to: $src" }
-            cloudRepo.upload(client = client, src = tmpJsonPath, dstDir = src)
-            rootService.deleteRecursively(tmpDir)
-
-            log { "Creating parent directory for: $dst" }
-            client.mkdirRecursively(dst = PathUtil.getParentPath(dst))
-
-            log { "Calling renameTo from $src to $dst" }
-
-            // 使用带进度回调的 renameTo
-            if (client is S3ClientImpl) {
-                log { "Using S3ClientImpl with progress callback" }
-                client.renameTo(src, dst) { currentPart, totalParts, currentFile, totalFiles ->
-                    log { "Progress callback invoked: Part $currentPart/$totalParts, File $currentFile/$totalFiles" }
-                    onProgress?.invoke(currentPart, totalParts, currentFile, totalFiles)
-                    log { "Progress: File $currentFile/$totalFiles, Part $currentPart/$totalParts" }
-                }
-            } else {
-                log { "Using non-S3 client, no progress callback" }
-                client.renameTo(src, dst)
-            }
-
-            log { "Updating database" }
-            filesDao.update(protectedFile)
-
-            log { "protectCloudFile completed successfully" }
-        }
+        val protectedFile = file.copy(extraInfo = file.extraInfo.copy(isProtected = true))
+        filesDao.update(protectedFile)
     }.withLog()
 
     suspend fun deleteFile(cloudName: String?, file: MediaEntity) {

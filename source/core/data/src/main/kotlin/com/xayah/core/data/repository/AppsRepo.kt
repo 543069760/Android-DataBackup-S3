@@ -310,6 +310,7 @@ class AppsRepo @Inject constructor(
                 preserveId = DefaultPreserveId,
                 cloud = "",
                 backupDir = "",
+                backupTimestamp = 0L,
             ),
             packageInfo = PackageInfo(
                 info.applicationInfo?.loadLabel(pm).toString(),
@@ -519,20 +520,18 @@ class AppsRepo @Inject constructor(
         }
     }.withLog()
 
-    private fun parsePreserveAndUserId(pathParcelable: PathParcelable): Pair<Long, Int>? {
+    private fun parseTimestampAndUserId(pathParcelable: PathParcelable): Pair<Long, Int>? {
         runCatching {
             val userPath = pathParcelable.pathList[pathParcelable.pathList.size - 2]
             if (userPath.contains("@")) {
-                val userIdWithPreserveId = userPath.split("@")
-                val preserveId = userIdWithPreserveId.lastOrNull()?.toLongOrNull() ?: 0L
-                val userId =
-                    userIdWithPreserveId.first().split("_").lastOrNull()?.toIntOrNull() ?: 0
-                return preserveId to userId
+                val parts = userPath.split("@")
+                val timestamp = parts.lastOrNull()?.toLongOrNull() ?: 0L
+                val userId = parts.first().split("_").lastOrNull()?.toIntOrNull() ?: 0
+                return timestamp to userId
             } else {
-                // Main backup
-                val preserveId = 0L
+                // 旧格式,无时间戳
                 val userId = userPath.split("_").lastOrNull()?.toIntOrNull() ?: 0
-                return preserveId to userId
+                return 0L to userId
             }
         }
         return null
@@ -546,15 +545,16 @@ class AppsRepo @Inject constructor(
             onLoad(index, paths.size, fileName)
             if (fileName == ConfigsPackageRestoreName) {
                 runCatching {
-                    rootService.readJson<PackageEntity>(pathParcelable.pathString).also { p ->
-                        p?.id = 0
-                        p?.extraInfo?.activated = false
-                        p?.indexInfo?.cloud = ""
-                        p?.indexInfo?.backupDir = context.localBackupSaveDir()
-                        parsePreserveAndUserId(pathParcelable).also { result ->
-                            result?.also { (pId, uId) ->
-                                p?.indexInfo?.preserveId = pId
-                                p?.indexInfo?.userId = uId
+                    rootService.readJson<PackageEntity>(pathParcelable.pathString)?.also { p ->
+                        p.id = 0
+                        p.extraInfo.activated = false
+                        p.indexInfo.cloud = ""
+                        p.indexInfo.backupDir = context.localBackupSaveDir()
+                        parseTimestampAndUserId(pathParcelable)?.also { (timestamp, uId) ->
+                            p.indexInfo.backupTimestamp = timestamp
+                            p.indexInfo.userId = uId
+                            if (timestamp > 0L) {
+                                p.indexInfo.preserveId = 0L
                             }
                         }
                     }?.apply {
@@ -562,10 +562,10 @@ class AppsRepo @Inject constructor(
                                 packageName,
                                 indexInfo.opType,
                                 userId,
-                                preserveId,
                                 indexInfo.compressionType,
                                 indexInfo.cloud,
-                                indexInfo.backupDir
+                                indexInfo.backupDir,
+                                indexInfo.backupTimestamp
                             ) == null
                         ) {
                             appsDao.upsert(this)
@@ -584,7 +584,8 @@ class AppsRepo @Inject constructor(
     }
 
     private suspend fun loadCloudApps(
-        cloudName: String, onLoad: suspend (cur: Int, max: Int, content: String) -> Unit
+        cloudName: String,
+        onLoad: suspend (cur: Int, max: Int, content: String) -> Unit
     ) = runCatching {
         cloudRepo.withClient(cloudName) { client, entity ->
             val remote = entity.remote
@@ -598,28 +599,34 @@ class AppsRepo @Inject constructor(
                     if (fileName == ConfigsPackageRestoreName) {
                         runCatching {
                             cloudRepo.download(
-                                client = client, src = pathParcelable.pathString, dstDir = tmpDir
+                                client = client,
+                                src = pathParcelable.pathString,
+                                dstDir = tmpDir
                             ) { path ->
-                                rootService.readJson<PackageEntity>(path).also { p ->
-                                    p?.id = 0
-                                    p?.extraInfo?.activated = false
-                                    p?.indexInfo?.cloud = entity.name
-                                    p?.indexInfo?.backupDir = remote
-                                    parsePreserveAndUserId(pathParcelable).also { result ->
-                                        result?.also { (pId, uId) ->
-                                            p?.indexInfo?.preserveId = pId
-                                            p?.indexInfo?.userId = uId
+                                rootService.readJson<PackageEntity>(path)?.apply {
+                                    id = 0
+                                    extraInfo.activated = false
+                                    indexInfo.cloud = entity.name
+                                    indexInfo.backupDir = remote
+
+                                    // 解析时间戳和用户ID
+                                    parseTimestampAndUserId(pathParcelable)?.also { (timestamp, uId) ->
+                                        indexInfo.backupTimestamp = timestamp
+                                        indexInfo.userId = uId
+                                        if (timestamp > 0L) {
+                                            indexInfo.preserveId = 0L
                                         }
                                     }
-                                }?.apply {
+
+                                    // 查询数据库,如果不存在则插入
                                     if (appsDao.query(
                                             packageName,
                                             indexInfo.opType,
                                             userId,
-                                            preserveId,
                                             indexInfo.compressionType,
                                             indexInfo.cloud,
-                                            indexInfo.backupDir
+                                            indexInfo.backupDir,
+                                            indexInfo.backupTimestamp
                                         ) == null
                                     ) {
                                         appsDao.upsert(this)
@@ -629,6 +636,8 @@ class AppsRepo @Inject constructor(
                         }
                     }
                 }
+
+                // 清理不存在的备份记录
                 appsDao.queryPackages(OpType.RESTORE, entity.name, entity.remote).forEach {
                     val src = "${path}/${it.archivesRelativeDir}"
                     if (client.exists(src).not()) {
@@ -778,13 +787,9 @@ class AppsRepo @Inject constructor(
     }
 
     private suspend fun protectLocalApp(app: PackageEntity) {
-        val protectedApp =
-            app.copy(indexInfo = app.indexInfo.copy(preserveId = DateUtil.getTimestamp()))
-        val appsDir = pathUtil.getLocalBackupAppsDir()
-        val src = "${appsDir}/${app.archivesRelativeDir}"
-        val dst = "${appsDir}/${protectedApp.archivesRelativeDir}"
-        rootService.writeJson(data = protectedApp, dst = PathUtil.getPackageRestoreConfigDst(src))
-        rootService.renameTo(src, dst)
+        val protectedApp = app.copy(
+            extraInfo = app.extraInfo.copy(isProtected = true)
+        )
         appsDao.update(protectedApp)
     }
 
@@ -793,30 +798,10 @@ class AppsRepo @Inject constructor(
         app: PackageEntity,
         onProgress: ((currentPart: Int, totalParts: Int, currentFile: Int, totalFiles: Int) -> Unit)? = null
     ) = runCatching {
-        cloudRepo.withClient(cloudName) { client, entity ->
-            val protectedApp = app.copy(indexInfo = app.indexInfo.copy(preserveId = DateUtil.getTimestamp()))
-            val remote = entity.remote
-            val remoteAppsDir = pathUtil.getCloudRemoteAppsDir(remote)
-            val src = "${remoteAppsDir}/${app.archivesRelativeDir}"
-            val dst = "${remoteAppsDir}/${protectedApp.archivesRelativeDir}"
-            val tmpDir = pathUtil.getCloudTmpDir()
-            val tmpJsonPath = PathUtil.getPackageRestoreConfigDst(tmpDir)
-            rootService.writeJson(data = protectedApp, dst = tmpJsonPath)
-            cloudRepo.upload(client = client, src = tmpJsonPath, dstDir = src)
-            rootService.deleteRecursively(tmpDir)
-
-            // 使用带进度回调的 renameTo
-            if (client is S3ClientImpl) {
-                client.renameTo(src, dst) { currentPart, totalParts, currentFile, totalFiles ->
-                    onProgress?.invoke(currentPart, totalParts, currentFile, totalFiles)
-                }
-            } else {
-                client.renameTo(src, dst)
-            }
-
-            // 添加数据库更新
-            appsDao.update(protectedApp)
-        }
+        val protectedApp = app.copy(
+            extraInfo = app.extraInfo.copy(isProtected = true)
+        )
+        appsDao.update(protectedApp)
     }.withLog()
 
     suspend fun delete(id: Long) {

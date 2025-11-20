@@ -62,9 +62,12 @@ internal abstract class AbstractBackupService : AbstractMediumService() {
 
     @SuppressLint("StringFormatInvalid")
     override suspend fun onInitializing() {
+        // 生成本次备份的统一时间戳
+        val backupTimestamp = DateUtil.getTimestamp()
         val medium = mMediaRepo.queryActivated(OpType.BACKUP)
 
         medium.forEach { media ->
+            media.indexInfo.backupTimestamp = backupTimestamp
             mMediaEntities.add(
                 TaskDetailMediaEntity(
                     taskId = mTaskEntity.id,
@@ -87,6 +90,7 @@ internal abstract class AbstractBackupService : AbstractMediumService() {
     protected open suspend fun onItselfSaved(path: String, entity: ProcessingInfoEntity) {}
     protected open suspend fun onConfigsSaved(path: String, entity: ProcessingInfoEntity) {}
     protected open suspend fun clear() {}
+    protected open suspend fun onCleanupFailedBackup(archivesRelativeDir: String) {}
 
     protected abstract val mMediumBackupUtil: MediumBackupUtil
 
@@ -145,6 +149,13 @@ internal abstract class AbstractBackupService : AbstractMediumService() {
                         media.update(mediaEntity = m)
                         mTaskEntity.update(successCount = mTaskEntity.successCount + 1)
                     } else {
+                        // 备份失败,清理已上传的文件
+                        log { "Backup failed for ${m.name}, cleaning up remote files..." }
+                        runCatching {
+                            onCleanupFailedBackup(archivesRelativeDir = m.archivesRelativeDir)
+                        }.onFailure { e ->
+                            log { "Failed to cleanup remote files: ${e.message}" }
+                        }
                         mTaskEntity.update(failureCount = mTaskEntity.failureCount + 1)
                     }
                 } else {
