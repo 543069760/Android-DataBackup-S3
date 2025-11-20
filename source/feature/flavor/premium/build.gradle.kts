@@ -1,6 +1,5 @@
 plugins {
     alias(libs.plugins.library.common)
-    alias(libs.plugins.library.firebase)
 }
 
 android {

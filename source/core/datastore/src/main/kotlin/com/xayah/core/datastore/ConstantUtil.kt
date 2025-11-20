@@ -32,7 +32,7 @@ object ConstantUtil {
     )
 
     const val DOC_LINK = "https://DataBackupOfficial.github.io"
-    const val GITHUB_LINK = "https://github.com/XayahSuSuSu/Android-DataBackup"
+    const val GITHUB_LINK = "https://github.com/543069760/Android-DataBackup-S3"
     const val CHAT_LINK = "https://t.me/databackupchat"
     const val DONATE_BMAC_LINK = "https://buymeacoffee.com/xayahsususu"
     const val DONATE_PAYPAL_LINK = "https://paypal.me/XayahSuSuSu"

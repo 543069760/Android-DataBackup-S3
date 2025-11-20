@@ -8,7 +8,7 @@
         <!-- Workaround for CrashHandler -->
         <provider
             android:name="com.xayah.core.provider.CrashProvider"
-            android:authorities="com.xayah.core.provider.CrashProvider.alpha"
+            android:authorities="${applicationId}.crashprovider"
             android:exported="false"
             android:initOrder="101"
             tools:replace="android:authorities" />
@@ -16,7 +16,7 @@
 
         <provider
             android:name="com.xayah.core.provider.FileSharingProvider"
-            android:authorities="com.xayah.core.provider.FileSharingProvider.alpha"
+            android:authorities="${applicationId}.filesharingprovider"
             android:exported="false"
             android:grantUriPermissions="true"
             tools:replace="android:authorities">

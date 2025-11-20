@@ -5,11 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -54,16 +50,21 @@ fun MainIndexSubScaffold(
         topBar = {
             TopAppBar(
                 title = {
-                    Row(modifier = Modifier.height(IntrinsicSize.Min), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(SizeTokens.Level8)) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(SizeTokens.Level4)
+                    ) {
+                        // 第1行: APP名称
                         Text(text = title)
 
+                        // 第2行: 版本信息和更新徽章
                         BadgedBox(
                             badge = {
                                 if (updateAvailable)
                                     Badge(modifier = Modifier.size(SizeTokens.Level6))
                             }
                         ) {
-                            RoundChip(modifier = Modifier.fillMaxHeight(), onClick = if (updateAvailable) onVersionChipClick else null) {
+                            RoundChip(onClick = if (updateAvailable) onVersionChipClick else null) {
                                 var version by remember {
                                     mutableStateOf("${BuildConfigUtil.VERSION_NAME} ${BuildConfigUtil.FLAVOR_feature.capitalizeString()}")
                                 }

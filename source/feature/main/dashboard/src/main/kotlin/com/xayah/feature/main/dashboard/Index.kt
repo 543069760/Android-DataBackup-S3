@@ -88,7 +88,11 @@ fun PageDashboard() {
                 ).first
                 when (state) {
                     DismissState.CONFIRM -> {
-                        uiState.latestRelease?.assets?.firstOrNull { it.url.contains(BuildConfigUtil.FLAVOR_feature) && it.url.contains(BuildConfigUtil.FLAVOR_abi) }?.apply {
+                        uiState.latestRelease?.assets?.firstOrNull {
+                            it.url.contains("revived") &&  // 添加 revived 关键字
+                                    it.url.contains(BuildConfigUtil.FLAVOR_feature) &&
+                                    it.url.contains(BuildConfigUtil.FLAVOR_abi)
+                        }?.apply {
                             viewModel.emitIntent(IndexUiIntent.ToBrowser(context = context, url = this.url))
                         }
                     }
@@ -115,7 +119,7 @@ fun PageDashboard() {
     ) {
         Column(
             modifier = Modifier
-                .paddingTop(SizeTokens.Level8)
+                .paddingTop(SizeTokens.Level32)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(SizeTokens.Level24)
         ) {

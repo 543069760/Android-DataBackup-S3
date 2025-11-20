@@ -7,7 +7,7 @@ import retrofit2.http.GET
 import javax.inject.Inject
 import javax.inject.Singleton
 
-private const val BASE_URL = "https://api.github.com/repos/XayahSuSuSu/Android-DataBackup/"
+private const val BASE_URL = "https://api.github.com/repos/543069760/Android-DataBackup-S3/"
 
 private interface Api {
     @GET(value = "releases")

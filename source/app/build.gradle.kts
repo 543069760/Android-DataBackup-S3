@@ -9,11 +9,11 @@ plugins {
 }
 
 android {
-    namespace = "com.xayah.databackup"
+    namespace = "com.xayah.databackup"  // 修改:改回原来的包名
     compileSdk = libs.versions.compileSdk.get().toInt()
 
     defaultConfig {
-        applicationId = "com.xayah.databackup"
+        applicationId = "com.xayah.databackup.revived"  // 保持:新的应用包名
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
         versionCode = libs.versions.versionCode.get().toInt()
@@ -69,7 +69,7 @@ android {
     applicationVariants.all {
         outputs.forEach { output ->
             (output as BaseVariantOutputImpl).outputFileName =
-                "DataBackup-${versionName}-${productFlavors[0].name}-${productFlavors[1].name}-${buildType.name}.apk"
+                "DataBackup-Revived-${versionName}-${productFlavors[0].name}-${productFlavors[1].name}-${buildType.name}.apk"
         }
     }
 
