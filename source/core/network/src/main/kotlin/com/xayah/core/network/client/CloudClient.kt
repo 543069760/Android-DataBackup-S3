@@ -22,7 +22,7 @@ interface CloudClient {
         dst: String,
         onProgress: ((currentPart: Int, totalParts: Int, currentFile: Int, totalFiles: Int) -> Unit)? = null
     )
-    fun upload(src: String, dst: String, onUploading: (read: Long, total: Long) -> Unit)
+    fun upload(src: String, dst: String, onUploading: (read: Long, total: Long) -> Unit, isCanceled: (() -> Boolean)? = null)
     fun download(src: String, dst: String, onDownloading: (written: Long, total: Long) -> Unit)
     fun deleteFile(src: String)
     fun removeDirectory(src: String): Boolean

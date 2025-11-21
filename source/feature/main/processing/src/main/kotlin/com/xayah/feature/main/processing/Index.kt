@@ -160,10 +160,8 @@ fun PageProcessing(
                 viewModel.launchOnIO {
                     if (dialogState.confirm(title = context.getString(R.string.prompt), text = context.getString(R.string.processing_exit_confirmation))) {
                         BaseUtil.kill(context, "tar", "root")
-                        viewModel.emitIntent(ProcessingUiIntent.DestroyService)
-                        withMainContext {
-                            navController.popBackStack()
-                        }
+                        // 修改这里:使用 CancelAndCleanup 而不是 DestroyService
+                        viewModel.emitIntent(ProcessingUiIntent.CancelAndCleanup)
                     }
                 }
             } else {

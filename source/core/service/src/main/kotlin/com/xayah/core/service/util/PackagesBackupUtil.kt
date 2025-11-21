@@ -226,7 +226,8 @@ class PackagesBackupUtil @Inject constructor(
         p: PackageEntity,
         r: PackageEntity?,
         t: TaskDetailPackageEntity,
-        dstDir: String
+        dstDir: String,
+        isCanceled: (() -> Boolean)? = null
     ): ShellResult = run {
         log { "Backing up apk..." }
 
@@ -260,17 +261,16 @@ class PackagesBackupUtil @Inject constructor(
                         src = "./*.apk",
                         dst = dst,
                         extra = ct.getCompressPara(context.readCompressionLevel().first())
-                    )
-                        .also { result ->
-                            isSuccess = result.isSuccess
-                            out.addAll(result.out)
-                        }
-                    commonBackupUtil.testArchive(src = dst, ct = ct).also { result ->
-                        isSuccess = isSuccess && result.isSuccess
+                    ).also { result ->
+                        isSuccess = result.isSuccess
                         out.addAll(result.out)
-                        if (result.isSuccess) {
-                            p.setDataBytes(dataType, sizeBytes)
-                            p.setDisplayBytes(dataType, rootService.calculateSize(dst))
+
+                        // 压缩完成后立即检查取消标志
+                        if (isCanceled?.invoke() == true) {
+                            log { "Backup canceled after compression" }
+                            isSuccess = false
+                            out.add("Backup canceled by user")
+                            return@run ShellResult(code = -1, input = listOf(), out = out)
                         }
                     }
                 }
@@ -296,7 +296,8 @@ class PackagesBackupUtil @Inject constructor(
         t: TaskDetailPackageEntity,
         r: PackageEntity?,
         dataType: DataType,
-        dstDir: String
+        dstDir: String,
+        isCanceled: (() -> Boolean)? = null
     ): ShellResult = run {
         log { "Backing up ${dataType.type}..." }
 
@@ -376,6 +377,14 @@ class PackagesBackupUtil @Inject constructor(
                 ).also { result ->
                     isSuccess = result.isSuccess
                     out.addAll(result.out)
+
+                    // 压缩完成后立即检查取消标志
+                    if (isCanceled?.invoke() == true) {
+                        log { "Backup canceled after compression" }
+                        isSuccess = false
+                        out.add("Backup canceled by user")
+                        return@run ShellResult(code = -1, input = listOf(), out = out)
+                    }
                 }
                 commonBackupUtil.testArchive(src = dst, ct = ct).also { result ->
                     isSuccess = isSuccess && result.isSuccess
@@ -434,7 +443,8 @@ class PackagesBackupUtil @Inject constructor(
         t: TaskDetailPackageEntity,
         dataType: DataType,
         srcDir: String,
-        dstDir: String
+        dstDir: String,
+        isCanceled: (() -> Boolean)? = null  // 新增参数
     ) = run {
         val ct = p.indexInfo.compressionType
         val src = packageRepository.getArchiveDst(dstDir = srcDir, dataType = dataType, ct = ct)
@@ -449,6 +459,13 @@ class PackagesBackupUtil @Inject constructor(
         with(CoroutineScope(coroutineContext)) {
             launch {
                 while (flag) {
+                    // 在进度更新循环中也检查取消标志
+                    if (isCanceled?.invoke() == true) {
+                        log { "Upload progress monitoring canceled" }
+                        flag = false
+                        break
+                    }
+
                     val speedText = if (speed > 0) speed.formatToStorageSizePerSecond() else ""
                     val content = if (speedText.isNotEmpty()) {
                         "$speedText | ${(progress * 100).toInt()}%"
@@ -475,7 +492,8 @@ class PackagesBackupUtil @Inject constructor(
                     lastTime = currentTime
                     lastBytes = read
                 }
-            }
+            },
+            isCanceled = isCanceled  // 传递取消检查
         ).apply {
             flag = false
             t.updateInfo(

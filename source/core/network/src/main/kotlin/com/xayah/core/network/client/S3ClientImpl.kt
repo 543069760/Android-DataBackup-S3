@@ -304,7 +304,7 @@ class S3ClientImpl(
         }
     }
 
-    override fun upload(src: String, dst: String, onUploading: (read: Long, total: Long) -> Unit) {
+    override fun upload(src: String, dst: String, onUploading: (read: Long, total: Long) -> Unit, isCanceled: (() -> Boolean)?) {
         runBlocking {
             val name = PathUtil.getFileName(src)
             val dstPath = normalizeObjectKey("$dst/$name")
@@ -339,6 +339,12 @@ class S3ClientImpl(
                         var pn = 1
                         val partBuf = ByteArray(partSize)
                         while (true) {
+                            // 在读取每个分块前检查取消标志
+                            if (isCanceled?.invoke() == true) {
+                                log { "Upload canceled by user during file reading" }
+                                throw kotlinx.coroutines.CancellationException("Upload canceled")
+                            }
+
                             val haveRead = file.read(partBuf)
                             if (haveRead <= 0) break
 
@@ -347,6 +353,9 @@ class S3ClientImpl(
                             pn++
                         }
                     }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    log { "Producer canceled: ${e.message}" }
+                    throw e
                 } finally {
                     channel.close()
                 }
@@ -357,6 +366,13 @@ class S3ClientImpl(
                 launch {
                     for ((partNumber, partData) in channel) {
                         try {
+                            // 在上传每个分块前检查取消标志
+                            if (isCanceled?.invoke() == true) {
+                                log { "Upload canceled by user before uploading part $partNumber" }
+                                channel.cancel()
+                                throw kotlinx.coroutines.CancellationException("Upload canceled")
+                            }
+
                             log { "Uploading part $partNumber" }
 
                             val uploadPartResponse = s3Client?.uploadPart(
@@ -378,7 +394,18 @@ class S3ClientImpl(
                             val currentUploaded = uploadedBytes.addAndGet(partData.size.toLong())
                             onUploading(currentUploaded, srcFileSize)
 
+                            // 在进度更新后也检查取消标志
+                            if (isCanceled?.invoke() == true) {
+                                log { "Upload canceled by user after uploading part $partNumber" }
+                                channel.cancel()
+                                throw kotlinx.coroutines.CancellationException("Upload canceled")
+                            }
+
                             log { "Part $partNumber uploaded successfully" }
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            log { "Consumer canceled: ${e.message}" }
+                            channel.cancel()
+                            throw e
                         } catch (e: Exception) {
                             log { "Part $partNumber upload failed: ${e.message}" }
                             channel.cancel()
@@ -388,23 +415,40 @@ class S3ClientImpl(
                 }
             }
 
-            // 等待生产者和所有消费者完成
-            producer.join()
-            consumers.forEach { it.join() }
+            try {
+                // 等待生产者和所有消费者完成
+                producer.join()
+                consumers.forEach { it.join() }
 
-            // 按分块编号排序后完成上传
-            val sortedParts = completedParts.toSortedMap().values.toList()
+                // 按分块编号排序后完成上传
+                val sortedParts = completedParts.toSortedMap().values.toList()
 
-            s3Client?.completeMultipartUpload(
-                CompleteMultipartUploadRequest {
-                    bucket = extra.bucket
-                    key = dstPath
-                    uploadId = createMultipartUploadResponse?.uploadId
-                    multipartUpload { parts = sortedParts }
+                s3Client?.completeMultipartUpload(
+                    CompleteMultipartUploadRequest {
+                        bucket = extra.bucket
+                        key = dstPath
+                        uploadId = createMultipartUploadResponse?.uploadId
+                        multipartUpload { parts = sortedParts }
+                    }
+                )
+
+                onUploading(srcFileSize, srcFileSize)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // 取消时中止分片上传
+                log { "Upload canceled, aborting multipart upload" }
+                runCatching {
+                    s3Client?.abortMultipartUpload(
+                        AbortMultipartUploadRequest {
+                            bucket = extra.bucket
+                            key = dstPath
+                            uploadId = createMultipartUploadResponse?.uploadId
+                        }
+                    )
+                }.onFailure { abortError ->
+                    log { "Failed to abort multipart upload: ${abortError.message}" }
                 }
-            )
-
-            onUploading(srcFileSize, srcFileSize)
+                throw e
+            }
         }
     }
 

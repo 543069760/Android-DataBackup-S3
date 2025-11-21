@@ -38,31 +38,33 @@ class CloudRepository @Inject constructor(
 
     suspend fun delete(entity: CloudEntity) = cloudDao.delete(entity)
 
-    suspend fun upload(client: CloudClient, src: String, dstDir: String, onUploading: (read: Long, total: Long) -> Unit = { _, _ -> }): ShellResult = run {
-        log { "Uploading..." }
-
+    suspend fun upload(
+        client: CloudClient,
+        src: String,
+        dstDir: String,
+        onUploading: (read: Long, total: Long) -> Unit,
+        isCanceled: (() -> Boolean)? = null  // 新增参数
+    ): ShellResult = run {
         var isSuccess = true
         val out = mutableListOf<String>()
-        PathUtil.setFilesDirSELinux(context)
 
         runCatching {
-            client.upload(src = src, dst = dstDir, onUploading = onUploading)
-            out.add("Upload succeed.")
-        }.onFailure {
+            client.upload(
+                src = src,
+                dst = dstDir,
+                onUploading = onUploading,
+                isCanceled = isCanceled  // 传递取消检查
+            )
+        }.onFailure { e ->
             isSuccess = false
-            val stringWriter = StringWriter()
-            val printWriter = PrintWriter(stringWriter)
-            it.printStackTrace(printWriter)
-            if (it.localizedMessage != null)
-                out.add(log { stringWriter.toString() })
+            out.add(e.message ?: "Unknown error")
         }
 
-        rootService.deleteRecursively(src).also { result ->
-            isSuccess = isSuccess and result
-            if (result.not()) out.add(log { "Failed to delete $src." })
-        }
-
-        ShellResult(code = if (isSuccess) 0 else -1, input = listOf(), out = out)
+        ShellResult(
+            code = if (isSuccess) 0 else -1,
+            input = listOf(),
+            out = out
+        )
     }
 
     suspend fun download(

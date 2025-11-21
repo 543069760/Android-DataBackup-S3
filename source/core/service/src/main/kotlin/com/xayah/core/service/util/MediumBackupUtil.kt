@@ -72,7 +72,8 @@ class MediumBackupUtil @Inject constructor(
         m: MediaEntity,
         t: TaskDetailMediaEntity,
         r: MediaEntity?,
-        dstDir: String
+        dstDir: String,
+        isCanceled: (() -> Boolean)? = null
     ): ShellResult = run {
         log { "Backing up ${DataType.MEDIA_MEDIA.type}..." }
 
@@ -105,19 +106,19 @@ class MediumBackupUtil @Inject constructor(
                 exclusionList = listOf(),
                 h = if (context.readFollowSymlinks().first()) "-h" else "",
                 srcDir = srcDir,
-                src = PathUtil.getFileName(src),// the name is not always the actual file name of the source,but the src does contain
+                src = PathUtil.getFileName(src),
                 dst = dst,
                 extra = ct.getCompressPara(context.readCompressionLevel().first())
             ).also { result ->
                 isSuccess = result.isSuccess
                 out.addAll(result.out)
-            }
-            commonBackupUtil.testArchive(src = dst, ct = ct).also { result ->
-                isSuccess = isSuccess && result.isSuccess
-                out.addAll(result.out)
-                if (result.isSuccess) {
-                    m.setDataBytes(sizeBytes)
-                    m.setDisplayBytes(rootService.calculateSize(dst))
+
+                // 压缩完成后立即检查取消标志
+                if (isCanceled?.invoke() == true) {
+                    log { "Backup canceled after compression" }
+                    isSuccess = false
+                    out.add("Backup canceled by user")
+                    return@run ShellResult(code = -1, input = listOf(), out = out)
                 }
             }
         }
@@ -135,7 +136,8 @@ class MediumBackupUtil @Inject constructor(
         m: MediaEntity,
         t: TaskDetailMediaEntity,
         srcDir: String,
-        dstDir: String
+        dstDir: String,
+        isCanceled: (() -> Boolean)? = null  // 新增参数
     ) = run {
         val ct = m.indexInfo.compressionType
         val src = mediaRepository.getArchiveDst(dstDir = srcDir, ct = ct)
@@ -150,6 +152,13 @@ class MediumBackupUtil @Inject constructor(
         with(CoroutineScope(coroutineContext)) {
             launch {
                 while (flag) {
+                    // 在进度更新循环中也检查取消标志
+                    if (isCanceled?.invoke() == true) {
+                        log { "Upload progress monitoring canceled" }
+                        flag = false
+                        break
+                    }
+
                     val speedText = if (speed > 0) speed.formatToStorageSizePerSecond() else ""
                     val content = if (speedText.isNotEmpty()) {
                         "$speedText | ${(progress * 100).toInt()}%"
@@ -176,7 +185,8 @@ class MediumBackupUtil @Inject constructor(
                     lastTime = currentTime
                     lastBytes = read
                 }
-            }
+            },
+            isCanceled = isCanceled  // 传递取消检查
         ).apply {
             flag = false
             t.updateInfo(

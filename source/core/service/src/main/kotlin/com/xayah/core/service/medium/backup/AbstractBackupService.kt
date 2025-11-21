@@ -91,7 +91,7 @@ internal abstract class AbstractBackupService : AbstractMediumService() {
     protected open suspend fun onConfigsSaved(path: String, entity: ProcessingInfoEntity) {}
     protected open suspend fun clear() {}
     protected open suspend fun onCleanupFailedBackup(archivesRelativeDir: String) {}
-
+    override suspend fun onCleanupIncompleteBackup(currentIndex: Int) {}
     protected abstract val mMediumBackupUtil: MediumBackupUtil
 
     override suspend fun onPreprocessing(entity: ProcessingInfoEntity) {
@@ -112,7 +112,14 @@ internal abstract class AbstractBackupService : AbstractMediumService() {
         mTaskEntity.update(rawBytes = mTaskRepo.getRawBytes(TaskType.MEDIA), availableBytes = mTaskRepo.getAvailableBytes(OpType.BACKUP), totalBytes = mTaskRepo.getTotalBytes(OpType.BACKUP), totalCount = mMediaEntities.size)
         log { "Task count: ${mMediaEntities.size}." }
 
-        mMediaEntities.forEachIndexed { index, media ->
+        for (index in mMediaEntities.indices) {
+            // 立即检查取消标志
+            if (isCanceled()) {
+                log { "Backup canceled by user at media index: $index" }
+                break
+            }
+
+            val media = mMediaEntities[index]
             executeAtLeast {
                 NotificationUtil.notify(
                     mContext,

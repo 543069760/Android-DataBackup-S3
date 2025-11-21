@@ -64,8 +64,14 @@ abstract class AbstractProcessingServiceProxy {
      */
     fun destroyService(clearNotification: Boolean = false) {
         if (clearNotification) NotificationUtil.cancel(context)
-        if (mConnection != null)
-            context.unbindService(mConnection!!)
+        if (mConnection != null) {
+            runCatching {
+                context.unbindService(mConnection!!)
+            }.onFailure { e ->
+                // 服务可能已经解绑,忽略异常
+                android.util.Log.w("AbstractProcessingServiceProxy", "Failed to unbind service: ${e.message}")
+            }
+        }
         mService?.stopSelf()
         mBinder = null
         mService = null
@@ -90,4 +96,9 @@ abstract class AbstractProcessingServiceProxy {
     suspend fun processing() = getService().processing()
 
     suspend fun postProcessing() = getService().postProcessing()
+
+    suspend fun cleanupIncompleteBackup(currentIndex: Int) = getService().cleanupIncompleteBackup(currentIndex)
+
+    suspend fun requestCancel() = getService().requestCancel()
+
 }

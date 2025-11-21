@@ -194,7 +194,12 @@ class MediaRepository @Inject constructor(
                     val tmpDir = pathUtil.getCloudTmpDir()
                     val tmpJsonPath = PathUtil.getMediaRestoreConfigDst(tmpDir)
                     rootService.writeJson(data = mediaEntity, dst = tmpJsonPath)
-                    cloudRepository.upload(client = client, src = tmpJsonPath, dstDir = src)
+                    cloudRepository.upload(
+                        client = client,
+                        src = tmpJsonPath,
+                        dstDir = src,
+                        onUploading = { _, _ -> }  // 添加空实现
+                    )
                     rootService.deleteRecursively(tmpDir)
                     client.renameTo(src, dst)
                 }

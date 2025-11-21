@@ -89,7 +89,7 @@ class FTPClientImpl(private val entity: CloudEntity, private val extra: FTPExtra
         if (client.rename(src, dst).not()) throw IOException("Failed to rename file from $src to $dst.")
     }
 
-    override fun upload(src: String, dst: String, onUploading: (read: Long, total: Long) -> Unit) = withClient { client ->
+    override fun upload(src: String, dst: String, onUploading: (read: Long, total: Long) -> Unit, isCanceled: (() -> Boolean)?) = withClient { client ->
         val name = PathUtil.getFileName(src)
         val dstPath = "$dst/$name"
         log { "upload: $src to $dstPath" }

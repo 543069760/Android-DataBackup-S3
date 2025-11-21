@@ -83,21 +83,48 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
     }
 
     override suspend fun backup(type: DataType, p: PackageEntity, r: PackageEntity?, t: TaskDetailPackageEntity, dstDir: String) {
+        // 在开始备份前检查取消标志
+        if (isCanceled()) {
+            log { "Backup canceled before processing $type" }
+            return
+        }
+
         val remoteAppDir = getRemoteAppDir(p.archivesRelativeDir)
         val result = if (type == DataType.PACKAGE_APK) {
-            mPackagesBackupUtil.backupApk(p = p, t = t, r = r, dstDir = dstDir)
+            mPackagesBackupUtil.backupApk(p = p, t = t, r = r, dstDir = dstDir, isCanceled = { isCanceled() })
         } else {
-            mPackagesBackupUtil.backupData(p = p, t = t, r = r, dataType = type, dstDir = dstDir)
+            mPackagesBackupUtil.backupData(p = p, t = t, r = r, dataType = type, dstDir = dstDir, isCanceled = { isCanceled() })
         }
+
+        // 压缩后再次检查取消标志
+        if (isCanceled()) {
+            log { "Backup canceled after compression for $type" }
+            return
+        }
+
         if (result.isSuccess && t.get(type).state != OperationState.SKIP) {
-            mPackagesBackupUtil.upload(client = mClient, p = p, t = t, dataType = type, srcDir = dstDir, dstDir = remoteAppDir)
+            mPackagesBackupUtil.upload(
+                client = mClient,
+                p = p,
+                t = t,
+                dataType = type,
+                srcDir = dstDir,
+                dstDir = remoteAppDir,
+                isCanceled = { isCanceled() }
+            )
         }
         t.update(dataType = type, progress = 1f)
         t.update(processingIndex = t.processingIndex + 1)
     }
 
     override suspend fun onConfigSaved(path: String, archivesRelativeDir: String) {
-        mCloudRepo.upload(client = mClient, src = path, dstDir = getRemoteAppDir(archivesRelativeDir))
+        mCloudRepo.upload(
+            client = mClient,
+            src = path,
+            dstDir = getRemoteAppDir(archivesRelativeDir),
+            onUploading = { _, _ -> },  // 添加空实现
+            isCanceled = { isCanceled() }  // 新增:传入取消检查
+        )
     }
 
     // 实现清理失败备份的逻辑
@@ -110,6 +137,26 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
             log { "Successfully cleaned up: $remoteAppDir" }
         }.onFailure { e ->
             log { "Failed to cleanup: ${e.message}" }
+        }
+    }
+
+    // 实现清理未完成备份的逻辑(用于取消操作)
+    override suspend fun onCleanupIncompleteBackup(currentIndex: Int) {
+        log { "Cleaning up incomplete backups from index: $currentIndex" }
+
+        // 遍历所有包实体,只清理索引 >= currentIndex 的项目
+        mPkgEntities.forEachIndexed { index, pkg ->
+            if (index >= currentIndex) {
+                val remoteAppDir = getRemoteAppDir(pkg.packageEntity.archivesRelativeDir)
+                log { "Cleaning up incomplete backup at: $remoteAppDir (index: $index)" }
+                runCatching {
+                    mClient.deleteRecursively(remoteAppDir)
+                }.onSuccess {
+                    log { "Successfully cleaned up: $remoteAppDir" }
+                }.onFailure { e ->
+                    log { "Failed to cleanup: ${e.message}" }
+                }
+            }
         }
     }
 
@@ -150,7 +197,8 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
                     lastTime = currentTime
                     lastBytes = read
                 }
-            }
+            },
+            isCanceled = { isCanceled() }
         ).apply {
             flag = false
             entity.update(
@@ -198,7 +246,8 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
                     lastTime = currentTime
                     lastBytes = read
                 }
-            }
+            },
+            isCanceled = { isCanceled() }
         ).apply {
             flag = false
             entity.update(
@@ -246,7 +295,8 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
                     lastTime = currentTime
                     lastBytes = read
                 }
-            }
+            },
+            isCanceled = { isCanceled() }
         ).apply {
             flag = false
             entity.update(

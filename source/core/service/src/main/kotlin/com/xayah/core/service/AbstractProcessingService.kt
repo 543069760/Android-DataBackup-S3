@@ -129,6 +129,27 @@ internal abstract class AbstractProcessingService : Service() {
     protected var mStartTimestamp: Long = 0
     protected var mEndTimestamp: Long = 0
 
+    // 取消标志
+    @Volatile
+    private var mIsCanceled = false
+
+    /**
+     * 请求取消当前操作(立即生效)
+     */
+    fun requestCancel() {
+        log { "Cancel requested - immediate termination" }
+        mIsCanceled = true
+    }
+
+    /**
+     * 检查是否已请求取消
+     */
+    protected fun isCanceled(): Boolean = mIsCanceled
+    /**
+     * 子类可重写此方法来实现具体的清理逻辑
+     */
+    protected open suspend fun onCleanupIncompleteBackup(currentIndex: Int) {}
+
     @SuppressLint("StringFormatInvalid")
     suspend fun initialize(): Long {
         mMutex.withLock {
@@ -201,6 +222,14 @@ internal abstract class AbstractProcessingService : Service() {
             mEndTimestamp = DateUtil.getTimestamp()
             afterPostProcessing()
             mTaskEntity.update(endTimestamp = mEndTimestamp, isProcessing = false, processingIndex = mTaskEntity.processingIndex + 1)
+        }
+    }
+
+    // 新增清理方法
+    suspend fun cleanupIncompleteBackup(currentIndex: Int) = withIOContext {
+        mMutex.withLock {
+            log { "Cleaning up incomplete backup from index: $currentIndex" }
+            onCleanupIncompleteBackup(currentIndex)
         }
     }
 }

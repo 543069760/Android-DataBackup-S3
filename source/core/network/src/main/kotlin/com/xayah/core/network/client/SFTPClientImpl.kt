@@ -112,7 +112,7 @@ class SFTPClientImpl(private val entity: CloudEntity, private val extra: SFTPExt
         withSFTPClient { it.rename(src, dst) }
     }
 
-    override fun upload(src: String, dst: String, onUploading: (read: Long, total: Long) -> Unit) {
+    override fun upload(src: String, dst: String, onUploading: (read: Long, total: Long) -> Unit, isCanceled: (() -> Boolean)?) = run {
         val name = PathUtil.getFileName(src)
         val dstPath = "$dst/$name"
         log { "upload: $src to $dstPath" }

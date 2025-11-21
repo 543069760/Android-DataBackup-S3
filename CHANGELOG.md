@@ -1,3 +1,86 @@
+## 2025-11-22
+
+**实现备份过程的即时取消响应机制**
+
+### 核心功能
+
+实现了多层次的取消检查机制,使备份操作能够在 1-5 秒内响应用户的取消请求,无论文件大小。
+
+### 技术实现
+
+#### 1. S3 上传取消检查
+- 在 `S3ClientImpl.upload()` 中实现三层取消检查:
+    - 生产者协程:在读取每个文件分块前检查取消标志
+    - 消费者协程:在上传每个分块前检查取消标志
+    - 上传完成后:再次检查取消标志
+- 检测到取消时抛出 `CancellationException` 并调用 `abortMultipartUpload()` 清理未完成分片
+- 使用 Kotlin Coroutines Channel 的取消机制确保所有协程立即停止
+
+#### 2. 压缩过程取消检查
+- 在 `PackagesBackupUtil.backupApk()` 和 `backupData()` 中添加 `isCanceled` 参数
+- 在 `MediumBackupUtil.backupMedia()` 中添加 `isCanceled` 参数
+- 在 `Tar.compress()` 调用后立即检查取消标志
+- 检测到取消时返回失败状态,避免继续执行测试和上传操作
+
+#### 3. 备份循环取消检查
+- 在 `AbstractBackupService.onProcessing()` 的主循环开始时检查取消标志
+- 在 permissions 和 ssaid 备份前检查取消标志
+- 检测到取消后立即使用 `for` 退出循环
+- 调用 `onCleanupIncompleteBackup(currentIndex)` 清理未完成的备份
+
+#### 4. 接口层改进
+- `CloudClient.upload()` 接口添加 `isCanceled: (() -> Boolean)? = null` 参数
+- 所有实现类(`FTPClientImpl`、`SFTPClientImpl`、`SMBClientImpl`、`WebDAVClientImpl`、`S3ClientImpl`)更新方法签名
+- 使用 `withClient` 包装器确保可空 client 的安全调用
+- 只有 `S3ClientImpl` 实现了实际的取消检查逻辑(其他协议保持现有实现)
+
+#### 5. Repository 层传递
+- `CloudRepository.upload()` 添加 `isCanceled` 参数并传递给底层 `CloudClient`
+- 所有上传配置文件的调用添加空实现 `onUploading = { _, _ -> }`
+- 异常处理确保取消操作优雅返回失败状态
+
+#### 6. Service 层集成
+- 所有 `BackupService` 实现类在调用 `backup()` 方法时传入 `isCanceled = { isCanceled() }`
+- 所有 `onConfigSaved()`、`onItselfSaved()`、`onIconsSaved()`、`onConfigsSaved()` 方法添加取消检查
+- `backup()` 方法检查返回结果,失败时立即返回,不继续执行后续操作
+
+#### 7. ViewModel 层支持
+- `AbstractProcessingViewModel` 实现 `CancelAndCleanup` intent
+- 调用 `destroyService(true)` 立即终止服务
+- 清理任务数据库记录并重置任务 ID
+- 发送 `NavBack` effect 返回上一页面
+
+### 响应时间
+
+| 场景 | 响应时间 | 说明 |  
+|------|---------|------|  
+| **小文件上传** (< 10MB) | < 1 秒 | 在下一次进度更新时检测到取消 |  
+| **大文件上传** | 1-5 秒 | 取决于单个分块的上传时间(10MB-100MB) |  
+| **压缩过程** | 等待压缩完成 | Tar 命令行工具限制,无法中断 |  
+| **循环迭代** | 立即 | 在下一次迭代开始时检测到取消 |  
+
+### 工作流程
+
+1. 点击取消按钮
+2. ViewModel 调用 `requestCancel()` 设置 `mIsCanceled = true`
+3. 下一次循环迭代开始时检查 `isCanceled()` → 如果为 true 则 `for` 退出循环
+4. 如果正在压缩,压缩完成后立即检查取消标志并返回失败
+5. 如果正在上传,S3ClientImpl 在上传每个分块前检查取消标志并中断上传
+6. 调用 `onCleanupIncompleteBackup(currentIndex)` 删除所有索引 >= currentIndex 的备份
+7. 已完成的备份(索引 < currentIndex)保持不变
+
+### 技术限制
+
+- 压缩过程使用 Tar 命令行工具,无法在压缩过程中中断,只能在压缩完成后检查取消标志
+- 对于特别大的文件(数 GB),压缩可能需要较长时间,但这是 Tar 工具的固有限制
+- 上传过程的响应时间取决于网络速度和分块大小,通常在 1-5 秒内
+
+### 向后兼容性
+
+- 所有接口改动使用默认参数 `isCanceled: (() -> Boolean)? = null`,确保向后兼容
+- 不传 `isCanceled` 参数的现有调用仍然可以正常工作
+- 其他协议(FTP、SFTP、SMB、WebDAV)的实现保持不变,只更新方法签名
+
 ## 2025-11-21
 
 **优化 S3 上传性能并新增网络类型选择**

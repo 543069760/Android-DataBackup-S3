@@ -15,6 +15,7 @@ import com.xayah.core.service.util.CommonBackupUtil
 import com.xayah.core.service.util.PackagesBackupUtil
 import com.xayah.core.util.PathUtil
 import com.xayah.core.util.localBackupSaveDir
+import com.xayah.core.model.OperationState
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 
@@ -50,11 +51,31 @@ internal class BackupServiceLocalImpl @Inject constructor() : AbstractBackupServ
     }
 
     override suspend fun backup(type: DataType, p: PackageEntity, r: PackageEntity?, t: TaskDetailPackageEntity, dstDir: String) {
-        if (type == DataType.PACKAGE_APK) {
-            mPackagesBackupUtil.backupApk(p = p, t = t, r = r, dstDir = dstDir)
+        val result = if (type == DataType.PACKAGE_APK) {
+            mPackagesBackupUtil.backupApk(
+                p = p,
+                t = t,
+                r = r,
+                dstDir = dstDir,
+                isCanceled = { isCanceled() }
+            )
         } else {
-            mPackagesBackupUtil.backupData(p = p, t = t, r = r, dataType = type, dstDir = dstDir)
+            mPackagesBackupUtil.backupData(
+                p = p,
+                t = t,
+                r = r,
+                dataType = type,
+                dstDir = dstDir,
+                isCanceled = { isCanceled() }
+            )
         }
+
+        // 检查备份结果,如果失败(可能是取消导致)则立即返回
+        if (!result.isSuccess) {
+            log { "Backup failed or canceled for ${p.packageName}, type: ${type.type}" }
+            return
+        }
+
         t.update(dataType = type, progress = 1f)
         t.update(processingIndex = t.processingIndex + 1)
     }
@@ -71,4 +92,23 @@ internal class BackupServiceLocalImpl @Inject constructor() : AbstractBackupServ
     override val mRootDir by lazy { mContext.localBackupSaveDir() }
     override val mAppsDir by lazy { mPathUtil.getLocalBackupAppsDir() }
     override val mConfigsDir by lazy { mPathUtil.getLocalBackupConfigsDir() }
+
+    // 实现清理未完成备份的逻辑
+    override suspend fun onCleanupIncompleteBackup(currentIndex: Int) {
+        log { "Cleaning up incomplete local backup from index: $currentIndex" }
+
+        mPkgEntities.forEachIndexed { index, pkg ->
+            if (index >= currentIndex) {
+                val localAppDir = "${mAppsDir}/${pkg.packageEntity.archivesRelativeDir}"
+                log { "Cleaning up incomplete backup at: $localAppDir" }
+                runCatching {
+                    mRootService.deleteRecursively(localAppDir)
+                }.onSuccess {
+                    log { "Successfully cleaned up: $localAppDir" }
+                }.onFailure { e ->
+                    log { "Failed to cleanup: ${e.message}" }
+                }
+            }
+        }
+    }
 }

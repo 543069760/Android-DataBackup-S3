@@ -101,7 +101,7 @@ class WebDAVClientImpl(private val entity: CloudEntity, private val extra: WebDA
         client.move(getPath(src), getPath(dst), false)
     }
 
-    override fun upload(src: String, dst: String, onUploading: (read: Long, total: Long) -> Unit) = withClient { client ->
+    override fun upload(src: String, dst: String, onUploading: (read: Long, total: Long) -> Unit, isCanceled: (() -> Boolean)?) = withClient { client ->
         val name = PathUtil.getFileName(src)
         val dstPath = "${getPath(dst)}/$name"
         log { "upload: $src to $dstPath" }

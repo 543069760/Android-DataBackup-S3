@@ -1,6 +1,8 @@
 package com.xayah.core.service.packages.backup
 
 import android.annotation.SuppressLint
+import android.content.pm.PackageManager
+import android.os.Build
 import com.xayah.core.common.util.toLineString
 import com.xayah.core.datastore.readBackupConfigs
 import com.xayah.core.datastore.readBackupItself
@@ -76,8 +78,38 @@ internal abstract class AbstractBackupService : AbstractPackagesService() {
         // 生成本次备份的统一时间戳
         val backupTimestamp = DateUtil.getTimestamp()
         val packages = mPackageRepo.queryActivated(OpType.BACKUP)
+
         packages.forEach { pkg ->
             pkg.indexInfo.backupTimestamp = backupTimestamp
+
+            // 关键修改:确保 packageInfo 完整
+            // 从系统获取最新的包信息
+            val info = mRootService.getPackageInfoAsUser(
+                pkg.packageName,
+                0,
+                pkg.userId
+            )
+
+            if (info != null) {
+                // 更新 packageInfo 字段
+                pkg.packageInfo.label = info.applicationInfo?.loadLabel(mContext.packageManager).toString()
+                pkg.packageInfo.versionName = info.versionName ?: ""
+                pkg.packageInfo.versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    info.longVersionCode
+                } else {
+                    @Suppress("DEPRECATION")
+                    info.versionCode.toLong()
+                }
+                pkg.packageInfo.flags = info.applicationInfo?.flags ?: 0
+                pkg.packageInfo.firstInstallTime = info.firstInstallTime
+                pkg.packageInfo.lastUpdateTime = info.lastUpdateTime
+
+                // 更新 extraInfo 字段
+                pkg.extraInfo.uid = info.applicationInfo?.uid ?: -1
+                pkg.extraInfo.permissions = mRootService.getPermissions(packageInfo = info)
+                pkg.extraInfo.enabled = info.applicationInfo?.enabled ?: false
+            }
+
             mPkgEntities.add(
                 TaskDetailPackageEntity(
                     taskId = mTaskEntity.id,
@@ -111,6 +143,9 @@ internal abstract class AbstractBackupService : AbstractPackagesService() {
     // 新增抽象方法:清理失败的备份
     protected open suspend fun onCleanupFailedBackup(archivesRelativeDir: String) {}
 
+    // 新增抽象方法:清理未完成的备份
+    override suspend fun onCleanupIncompleteBackup(currentIndex: Int) {}
+
     protected abstract val mPackagesBackupUtil: PackagesBackupUtil
 
     private lateinit var necessaryInfo: NecessaryInfo
@@ -141,7 +176,15 @@ internal abstract class AbstractBackupService : AbstractPackagesService() {
         val killAppOption = mContext.readKillAppOption().first()
         log { "Kill app option: $killAppOption" }
 
-        mPkgEntities.forEachIndexed { index, pkg ->
+        // 使用 for 循环替代 forEachIndexed,以便能够使用 break
+        for (index in mPkgEntities.indices) {
+            // 在每次迭代开始时检查取消标志
+            if (isCanceled()) {
+                log { "Backup canceled by user" }
+                break
+            }
+
+            val pkg = mPkgEntities[index]
             executeAtLeast {
                 NotificationUtil.notify(
                     mContext,
@@ -162,10 +205,10 @@ internal abstract class AbstractBackupService : AbstractPackagesService() {
                     p.packageName,
                     OpType.RESTORE,
                     p.userId,
-                    p.indexInfo.compressionType,  // 修正
-                    mTaskEntity.cloud,  // 修正
-                    mTaskEntity.backupDir,  // 修正
-                    p.indexInfo.backupTimestamp  // 修正
+                    p.indexInfo.compressionType,
+                    mTaskEntity.cloud,
+                    mTaskEntity.backupDir,
+                    p.indexInfo.backupTimestamp
                 )
                 mRootService.mkdirs(dstDir)
                 if (onAppDirCreated(archivesRelativeDir = p.archivesRelativeDir)) {
@@ -175,33 +218,43 @@ internal abstract class AbstractBackupService : AbstractPackagesService() {
                     backup(type = DataType.PACKAGE_DATA, p = p, r = restoreEntity, t = pkg, dstDir = dstDir)
                     backup(type = DataType.PACKAGE_OBB, p = p, r = restoreEntity, t = pkg, dstDir = dstDir)
                     backup(type = DataType.PACKAGE_MEDIA, p = p, r = restoreEntity, t = pkg, dstDir = dstDir)
-                    mPackagesBackupUtil.backupPermissions(p = p)
-                    mPackagesBackupUtil.backupSsaid(p = p)
 
-                    if (pkg.isSuccess) {
-                        p.extraInfo.lastBackupTime = DateUtil.getTimestamp()
-                        val id = restoreEntity?.id ?: 0
-                        restoreEntity = p.copy(
-                            id = id,
-                            indexInfo = p.indexInfo.copy(opType = OpType.RESTORE, cloud = mTaskEntity.cloud, backupDir = mTaskEntity.backupDir),
-                            extraInfo = p.extraInfo.copy(activated = false)
-                        )
-                        val configDst = PathUtil.getPackageRestoreConfigDst(dstDir = dstDir)
-                        mRootService.writeJson(data = restoreEntity, dst = configDst)
-                        onConfigSaved(path = configDst, archivesRelativeDir = p.archivesRelativeDir)
-                        mPackageDao.upsert(restoreEntity)
-                        mPackageDao.upsert(p)
-                        pkg.update(packageEntity = p)
-                        mTaskEntity.update(successCount = mTaskEntity.successCount + 1)
-                    } else {
-                        // 备份失败,清理已上传的文件
-                        log { "Backup failed for ${p.packageName}, cleaning up remote files..." }
-                        runCatching {
-                            onCleanupFailedBackup(archivesRelativeDir = p.archivesRelativeDir)
-                        }.onFailure { e ->
-                            log { "Failed to cleanup remote files: ${e.message}" }
-                        }
+                    // 在所有数据类型备份完成后,检查取消标志
+                    if (isCanceled()) {
+                        log { "Backup canceled, skipping permissions and ssaid" }
+                        pkg.update(state = OperationState.ERROR)
                         mTaskEntity.update(failureCount = mTaskEntity.failureCount + 1)
+                    } else {
+                        // 只有在未取消的情况下才执行 permissions 和 ssaid 备份
+                        mPackagesBackupUtil.backupPermissions(p = p)
+                        mPackagesBackupUtil.backupSsaid(p = p)
+
+                        if (pkg.isSuccess) {
+                            p.extraInfo.lastBackupTime = DateUtil.getTimestamp()
+                            val id = restoreEntity?.id ?: 0
+                            restoreEntity = p.copy(
+                                id = id,
+                                indexInfo = p.indexInfo.copy(opType = OpType.RESTORE, cloud = mTaskEntity.cloud, backupDir = mTaskEntity.backupDir),
+                                extraInfo = p.extraInfo.copy(activated = false)
+                            )
+                            val configDst = PathUtil.getPackageRestoreConfigDst(dstDir = dstDir)
+                            mRootService.writeJson(data = restoreEntity, dst = configDst)
+                            onConfigSaved(path = configDst, archivesRelativeDir = p.archivesRelativeDir)
+                            mPackageDao.upsert(restoreEntity)
+                            mPackageDao.upsert(p)
+                            pkg.update(packageEntity = p)
+                            mTaskEntity.update(successCount = mTaskEntity.successCount + 1)
+                        } else {
+                            // 备份失败,清理已上传的文件
+                            log { "Backup failed for ${p.packageName}, cleaning up remote files..." }
+                            runCatching {
+                                onCleanupFailedBackup(archivesRelativeDir = p.archivesRelativeDir)
+                            }.onFailure { e ->
+                                log { "Failed to cleanup remote files: ${e.message}" }
+                            }
+                            mTaskEntity.update(failureCount = mTaskEntity.failureCount + 1)
+                        }
+                        pkg.update(state = if (pkg.isSuccess) OperationState.DONE else OperationState.ERROR)
                     }
                 } else {
                     pkg.update(dataType = DataType.PACKAGE_APK, state = OperationState.ERROR)
@@ -210,8 +263,9 @@ internal abstract class AbstractBackupService : AbstractPackagesService() {
                     pkg.update(dataType = DataType.PACKAGE_DATA, state = OperationState.ERROR)
                     pkg.update(dataType = DataType.PACKAGE_OBB, state = OperationState.ERROR)
                     pkg.update(dataType = DataType.PACKAGE_MEDIA, state = OperationState.ERROR)
+                    pkg.update(state = OperationState.ERROR)
+                    mTaskEntity.update(failureCount = mTaskEntity.failureCount + 1)
                 }
-                pkg.update(state = if (pkg.isSuccess) OperationState.DONE else OperationState.ERROR)
             }
             mTaskEntity.update(processingIndex = mTaskEntity.processingIndex + 1)
         }

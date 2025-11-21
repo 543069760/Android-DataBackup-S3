@@ -49,9 +49,40 @@ internal class BackupServiceLocalImpl @Inject constructor() : AbstractBackupServ
     }
 
     override suspend fun backup(m: MediaEntity, r: MediaEntity?, t: TaskDetailMediaEntity, dstDir: String) {
-        mMediumBackupUtil.backupMedia(m = m, t = t, r = r, dstDir = dstDir)
+        val result = mMediumBackupUtil.backupMedia(
+            m = m,
+            t = t,
+            r = r,
+            dstDir = dstDir,
+            isCanceled = { isCanceled() }
+        )
+
+        // 检查备份结果,如果失败则立即返回
+        if (!result.isSuccess) {
+            log { "Backup failed or canceled for ${m.name}, stopping further processing" }
+            return
+        }
+
         t.update(progress = 1f)
         t.update(processingIndex = t.processingIndex + 1)
+    }
+
+    override suspend fun onCleanupIncompleteBackup(currentIndex: Int) {
+        log { "Cleaning up incomplete local file backup from index: $currentIndex" }
+
+        mMediaEntities.forEachIndexed { index, media ->
+            if (index >= currentIndex) {
+                val localFileDir = "${mFilesDir}/${media.mediaEntity.archivesRelativeDir}"
+                log { "Cleaning up incomplete backup at: $localFileDir" }
+                runCatching {
+                    mRootService.deleteRecursively(localFileDir)
+                }.onSuccess {
+                    log { "Successfully cleaned up: $localFileDir" }
+                }.onFailure { e ->
+                    log { "Failed to cleanup: ${e.message}" }
+                }
+            }
+        }
     }
 
     @Inject

@@ -210,8 +210,8 @@ class SMBClientImpl(private val entity: CloudEntity, private val extra: SMBExtra
         }
     }
 
-    override fun upload(src: String, dst: String, onUploading: (read: Long, total: Long) -> Unit) = run {
-        val name = PathUtil.getFileName(src)
+    override fun upload(src: String, dst: String, onUploading: (read: Long, total: Long) -> Unit, isCanceled: (() -> Boolean)?) = withClient { client ->
+    val name = PathUtil.getFileName(src)
         val dstPath = "$dst/$name"
         log { "upload: $src to $dstPath" }
         deleteFile(dstPath)
