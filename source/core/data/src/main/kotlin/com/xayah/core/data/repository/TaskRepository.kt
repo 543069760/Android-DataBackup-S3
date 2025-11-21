@@ -26,6 +26,11 @@ class TaskRepository @Inject constructor(
     fun queryPackageFlow(taskId: Long) = taskDao.queryPackageFlow(taskId)
     fun queryMediaFlow(taskId: Long) = taskDao.queryMediaFlow(taskId)
 
+    // 新增方法 / New method - 用于取消备份时删除任务记录
+    suspend fun deleteTask(taskId: Long) {
+        taskDao.deleteTask(taskId)
+    }
+
     suspend fun getRawBytes(taskType: TaskType): Double = run {
         var total = 0.0
         when (taskType) {

@@ -57,4 +57,6 @@
     <item name="endpoint" type="string"/>
     <item name="protocol" type="string"/>
     <item name="protocol_desc" type="string"/>
+    <item name="network_type_public" type="string"/>
+    <item name="network_type_private" type="string"/>
 </resources>

@@ -41,4 +41,7 @@ interface TaskDao {
 
     @Query("SELECT * FROM TaskDetailMediaEntity WHERE taskId = :taskId")
     fun queryMediaFlow(taskId: Long): Flow<List<TaskDetailMediaEntity>>
+
+    @Query("DELETE FROM TaskEntity WHERE id = :taskId")
+    suspend fun deleteTask(taskId: Long)
 }

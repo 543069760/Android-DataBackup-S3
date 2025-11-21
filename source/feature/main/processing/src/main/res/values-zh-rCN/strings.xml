@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="cancel_backup">取消备份</string>
+    <string name="canceling">正在取消…</string>
+    <string name="cancel_backup_confirmation">确定要取消吗？只会删除正在处理的项目,批量备份中已完成的备份将保留。</string>
+</resources>

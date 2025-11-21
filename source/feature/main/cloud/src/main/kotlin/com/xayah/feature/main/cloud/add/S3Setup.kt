@@ -40,6 +40,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xayah.core.model.database.S3Extra
 import com.xayah.core.model.database.S3Protocol
+import com.xayah.core.model.database.S3NetworkType  // 新增导入 / New import
 import com.xayah.core.network.util.getExtraEntity
 import com.xayah.core.ui.component.Clickable
 import com.xayah.core.ui.component.LocalSlotScope
@@ -67,23 +68,62 @@ fun PageS3Setup() {
     val navController = LocalNavController.current!!
     val viewModel = hiltViewModel<IndexViewModel>()
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(rememberTopAppBarState())
+    val scrollBehavior =
+        TopAppBarDefaults.exitUntilCollapsedScrollBehavior(rememberTopAppBarState())
 
     var name by rememberSaveable { mutableStateOf(uiState.currentName) }
-    var remote by rememberSaveable(uiState.cloudEntity) { mutableStateOf(uiState.cloudEntity?.remote ?: "") }
-    var region by rememberSaveable(uiState.cloudEntity) { mutableStateOf(uiState.cloudEntity?.getExtraEntity<S3Extra>()?.region ?: "") }
-    var accessKeyId by rememberSaveable(uiState.cloudEntity) { mutableStateOf(uiState.cloudEntity?.user ?: "") }
-    var secretAccessKey by rememberSaveable(uiState.cloudEntity) { mutableStateOf(uiState.cloudEntity?.pass ?: "") }
+    var remote by rememberSaveable(uiState.cloudEntity) {
+        mutableStateOf(
+            uiState.cloudEntity?.remote ?: ""
+        )
+    }
+    var region by rememberSaveable(uiState.cloudEntity) {
+        mutableStateOf(
+            uiState.cloudEntity?.getExtraEntity<S3Extra>()?.region ?: ""
+        )
+    }
+    var accessKeyId by rememberSaveable(uiState.cloudEntity) {
+        mutableStateOf(
+            uiState.cloudEntity?.user ?: ""
+        )
+    }
+    var secretAccessKey by rememberSaveable(uiState.cloudEntity) {
+        mutableStateOf(
+            uiState.cloudEntity?.pass ?: ""
+        )
+    }
     var secretKeyVisible by rememberSaveable { mutableStateOf(false) }
-    var bucket by rememberSaveable(uiState.cloudEntity) { mutableStateOf(uiState.cloudEntity?.getExtraEntity<S3Extra>()?.bucket ?: "") }
-    var endpoint by rememberSaveable(uiState.cloudEntity) { mutableStateOf(uiState.cloudEntity?.getExtraEntity<S3Extra>()?.endpoint ?: "") }
+    var bucket by rememberSaveable(uiState.cloudEntity) {
+        mutableStateOf(
+            uiState.cloudEntity?.getExtraEntity<S3Extra>()?.bucket ?: ""
+        )
+    }
+    var endpoint by rememberSaveable(uiState.cloudEntity) {
+        mutableStateOf(
+            uiState.cloudEntity?.getExtraEntity<S3Extra>()?.endpoint ?: ""
+        )
+    }
 
-    // 协议选择状态
+    // 协议选择状态 / Protocol selection state
     val protocolOptions = listOf("HTTPS", "HTTP")
     var protocolIndex by rememberSaveable(uiState.cloudEntity) {
         mutableIntStateOf(
             when (uiState.cloudEntity?.getExtraEntity<S3Extra>()?.protocol) {
                 S3Protocol.HTTP -> 1
+                else -> 0
+            }
+        )
+    }
+
+    // 网络类型选择状态 / Network type selection state
+    val networkTypeOptions = listOf(
+        stringResource(id = R.string.network_type_public),  // 公网(公有云) / Public Cloud
+        stringResource(id = R.string.network_type_private)  // 内网(自建S3) / Private Network
+    )
+    var networkTypeIndex by rememberSaveable(uiState.cloudEntity) {
+        mutableIntStateOf(
+            when (uiState.cloudEntity?.getExtraEntity<S3Extra>()?.networkType) {
+                S3NetworkType.PRIVATE -> 1
                 else -> 0
             }
         )
@@ -117,7 +157,8 @@ fun PageS3Setup() {
                             secretAccessKey = secretAccessKey,
                             bucket = bucket,
                             endpoint = endpoint,
-                            protocol = if (protocolIndex == 0) S3Protocol.HTTPS else S3Protocol.HTTP
+                            protocol = if (protocolIndex == 0) S3Protocol.HTTPS else S3Protocol.HTTP,
+                            networkType = if (networkTypeIndex == 0) S3NetworkType.PUBLIC else S3NetworkType.PRIVATE  // 新增 / New
                         )
                         viewModel.emitIntent(IndexUiIntent.TestConnection)
                     }
@@ -125,7 +166,6 @@ fun PageS3Setup() {
             ) {
                 Text(text = stringResource(id = R.string.test_connection))
             }
-
             Button(enabled = allFilled && remote.isNotEmpty() && uiState.isProcessing.not(), onClick = {
                 viewModel.launchOnIO {
                     viewModel.updateS3Entity(
@@ -136,7 +176,8 @@ fun PageS3Setup() {
                         secretAccessKey = secretAccessKey,
                         bucket = bucket,
                         endpoint = endpoint,
-                        protocol = if (protocolIndex == 0) S3Protocol.HTTPS else S3Protocol.HTTP
+                        protocol = if (protocolIndex == 0) S3Protocol.HTTPS else S3Protocol.HTTP,
+                        networkType = if (networkTypeIndex == 0) S3NetworkType.PUBLIC else S3NetworkType.PRIVATE  // 新增 / New
                     )
                     viewModel.emitIntent(IndexUiIntent.CreateAccount(navController = navController))
                 }
@@ -149,7 +190,11 @@ fun PageS3Setup() {
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(SizeTokens.Level24)
         ) {
-            Title(enabled = uiState.isProcessing.not(), title = stringResource(id = R.string.server), verticalArrangement = Arrangement.spacedBy(SizeTokens.Level24)) {
+            Title(
+                enabled = uiState.isProcessing.not(),
+                title = stringResource(id = R.string.server),
+                verticalArrangement = Arrangement.spacedBy(SizeTokens.Level24)
+            ) {
                 SetupTextField(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -184,7 +229,11 @@ fun PageS3Setup() {
                 )
             }
 
-            Title(enabled = uiState.isProcessing.not(), title = stringResource(id = R.string.account), verticalArrangement = Arrangement.spacedBy(SizeTokens.Level24)) {
+            Title(
+                enabled = uiState.isProcessing.not(),
+                title = stringResource(id = R.string.account),
+                verticalArrangement = Arrangement.spacedBy(SizeTokens.Level24)
+            ) {
                 SetupTextField(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -214,7 +263,10 @@ fun PageS3Setup() {
                 )
             }
 
-            Title(enabled = uiState.isProcessing.not(), title = stringResource(id = R.string.advanced)) {
+            Title(
+                enabled = uiState.isProcessing.not(),
+                title = stringResource(id = R.string.advanced)
+            ) {
                 SetupTextField(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -226,7 +278,7 @@ fun PageS3Setup() {
                     label = stringResource(id = R.string.endpoint)
                 )
 
-                // 协议选择 - 使用分段按钮
+                // 协议选择 - 使用分段按钮 / Protocol selection - using segmented buttons
                 SingleChoiceSegmentedButtonRow(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -235,11 +287,37 @@ fun PageS3Setup() {
                     protocolOptions.forEachIndexed { index, label ->
                         SegmentedButton(
                             enabled = uiState.isProcessing.not(),
-                            shape = SegmentedButtonDefaults.itemShape(index = index, count = protocolOptions.size),
+                            shape = SegmentedButtonDefaults.itemShape(
+                                index = index,
+                                count = protocolOptions.size
+                            ),
                             onClick = {
                                 protocolIndex = index
                             },
                             selected = index == protocolIndex
+                        ) {
+                            Text(label)
+                        }
+                    }
+                }
+
+                // 网络类型选择 - 使用分段按钮 / Network type selection - using segmented buttons
+                SingleChoiceSegmentedButtonRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .paddingHorizontal(SizeTokens.Level24),
+                ) {
+                    networkTypeOptions.forEachIndexed { index, label ->
+                        SegmentedButton(
+                            enabled = uiState.isProcessing.not(),
+                            shape = SegmentedButtonDefaults.itemShape(
+                                index = index,
+                                count = networkTypeOptions.size
+                            ),
+                            onClick = {
+                                networkTypeIndex = index
+                            },
+                            selected = index == networkTypeIndex
                         ) {
                             Text(label)
                         }
@@ -261,13 +339,15 @@ fun PageS3Setup() {
                             secretAccessKey = secretAccessKey,
                             bucket = bucket,
                             endpoint = endpoint,
-                            protocol = if (protocolIndex == 0) S3Protocol.HTTPS else S3Protocol.HTTP
+                            protocol = if (protocolIndex == 0) S3Protocol.HTTPS else S3Protocol.HTTP,
+                            networkType = if (networkTypeIndex == 0) S3NetworkType.PUBLIC else S3NetworkType.PRIVATE  // 新增 / New
                         )
                         viewModel.emitIntent(IndexUiIntent.SetRemotePath(context = context))
                         remote = uiState.cloudEntity!!.remote
                     }
                 }
 
+                // 删除账户按钮应该在 Clickable 之外,与它平级
                 if (uiState.currentName.isNotEmpty())
                     TextButton(
                         modifier = Modifier
@@ -287,7 +367,7 @@ fun PageS3Setup() {
                             color = ThemedColorSchemeKeyTokens.Error.value.withState(uiState.isProcessing.not())
                         )
                     }
-            }
+            }  // Title 块在这里结束
         }
     }
 }

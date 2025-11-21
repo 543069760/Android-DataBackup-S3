@@ -19,6 +19,7 @@ import com.xayah.core.ui.viewmodel.BaseViewModel
 import com.xayah.core.ui.viewmodel.IndexUiEffect
 import com.xayah.core.ui.viewmodel.UiIntent
 import com.xayah.core.ui.viewmodel.UiState
+import com.xayah.core.ui.material3.SnackbarType
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -39,6 +40,7 @@ open class ProcessingUiIntent : UiIntent {
     data object Initialize : ProcessingUiIntent()
     data object DestroyService : ProcessingUiIntent()
     data object TurnOffScreen : ProcessingUiIntent()
+    data object CancelAndCleanup : ProcessingUiIntent()
 }
 
 @ExperimentalCoroutinesApi
@@ -89,6 +91,40 @@ abstract class AbstractProcessingViewModel(
                     mLocalService.destroyService()
                 }
                 emitState(state.copy(state = OperationState.DONE))
+            }
+
+            is ProcessingUiIntent.CancelAndCleanup -> {
+                // 获取当前任务ID用于后续清理
+                val currentTaskId = _taskId.value
+
+                // 显示取消提示
+                emitEffectOnIO(
+                    IndexUiEffect.ShowSnackbar(
+                        message = mContext.getString(R.string.canceling),
+                        type = SnackbarType.Loading
+                    )
+                )
+
+                // 直接终止服务,系统会自动清理未完成的备份
+                if (state.storageType == StorageMode.Cloud) {
+                    mCloudService.destroyService(true)
+                } else {
+                    mLocalService.destroyService(true)
+                }
+
+                // 清理任务数据库记录(如果任务已创建)
+                if (currentTaskId > 0) {
+                    mTaskRepo.deleteTask(currentTaskId)
+                }
+
+                // 重置任务ID,避免再次进入时显示旧数据
+                _taskId.value = -1
+
+                // 更新状态为IDLE而非DONE,因为任务被取消了
+                emitState(state.copy(state = OperationState.IDLE))
+
+                // 发送导航返回Effect
+                emitEffect(IndexUiEffect.NavBack)
             }
 
             is ProcessingUiIntent.DestroyService -> {

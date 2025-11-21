@@ -23,8 +23,13 @@ import com.xayah.libpickyou.PickYouLauncher
 import com.xayah.libpickyou.parcelables.DirChildrenParcelable
 import com.xayah.libpickyou.parcelables.FileParcelable
 import com.xayah.libpickyou.ui.model.PickerType
+import com.xayah.core.model.database.S3NetworkType
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.launch
 import java.io.File
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.min
 import kotlin.math.max
 
@@ -289,7 +294,7 @@ class S3ClientImpl(
 
     private fun calculatePartSize(fileSize: Long): Long {
         val maxParts = 10000L
-        val minPartSize = 20L * 1024 * 1024  // 20MB
+        val minPartSize = 10L * 1024 * 1024  // 10MB
 
         val calculatedSize = fileSize / maxParts
 
@@ -307,8 +312,6 @@ class S3ClientImpl(
 
             val srcFile = File(src)
             val srcFileSize = srcFile.length()
-
-            // 使用动态计算的分块大小
             val partSize = calculatePartSize(srcFileSize).toInt()
 
             val createMultipartUploadResponse = s3Client?.createMultipartUpload(
@@ -318,61 +321,86 @@ class S3ClientImpl(
                 }
             )
 
-            val partBuf = ByteArray(partSize)
-            val completedParts = mutableListOf<CompletedPart>()
-            var uploadedBytes = 0L
+            // 根据网络类型动态设置并发数
+            val concurrency = when (extra.networkType) {
+                S3NetworkType.PRIVATE -> 5  // 内网使用 5 个并发
+                S3NetworkType.PUBLIC -> 3   // 公网使用 3 个并发
+            }
+            log { "Using concurrency: $concurrency for network type: ${extra.networkType}" }
+            val channel = kotlinx.coroutines.channels.Channel<Pair<Int, ByteArray>>(capacity = concurrency / 2)
 
-            // 速度计算变量
-            var lastUpdateTime = System.currentTimeMillis()
-            var lastUploadedBytes = 0L
-            var currentSpeed = 0L
+            val uploadedBytes = java.util.concurrent.atomic.AtomicLong(0L)
+            val completedParts = java.util.concurrent.ConcurrentHashMap<Int, CompletedPart>()
 
-            srcFile.inputStream().buffered().use { file ->
-                var pn = 1
-                while (true) {
-                    val haveRead = file.read(partBuf)
-                    if (haveRead <= 0) break
+            // 生产者协程:读取文件分块
+            val producer = launch {
+                try {
+                    srcFile.inputStream().buffered().use { file ->
+                        var pn = 1
+                        val partBuf = ByteArray(partSize)
+                        while (true) {
+                            val haveRead = file.read(partBuf)
+                            if (haveRead <= 0) break
 
-                    val uploadPartResponse = s3Client?.uploadPart(
-                        UploadPartRequest {
-                            bucket = extra.bucket
-                            key = dstPath
-                            uploadId = createMultipartUploadResponse?.uploadId
-                            partNumber = pn
-                            body = ByteStream.fromBytes(partBuf.copyOf(haveRead))
+                            // 发送到 channel,如果 channel 满了会自动阻塞
+                            channel.send(pn to partBuf.copyOf(haveRead))
+                            pn++
                         }
-                    )
-
-                    completedParts.add(
-                        CompletedPart {
-                            eTag = uploadPartResponse?.eTag
-                            partNumber = pn
-                        }
-                    )
-
-                    uploadedBytes += haveRead
-
-                    // 计算速度
-                    val currentTime = System.currentTimeMillis()
-                    val timeDiff = currentTime - lastUpdateTime
-                    if (timeDiff >= 500) {
-                        val bytesDiff = uploadedBytes - lastUploadedBytes
-                        currentSpeed = if (timeDiff > 0) (bytesDiff * 1000 / timeDiff) else 0L
-                        lastUpdateTime = currentTime
-                        lastUploadedBytes = uploadedBytes
                     }
-
-                    onUploading(uploadedBytes, srcFileSize)
-                    pn++
+                } finally {
+                    channel.close()
                 }
             }
+
+            // 消费者协程:并发上传分块
+            val consumers = List(concurrency) {
+                launch {
+                    for ((partNumber, partData) in channel) {
+                        try {
+                            log { "Uploading part $partNumber" }
+
+                            val uploadPartResponse = s3Client?.uploadPart(
+                                UploadPartRequest {
+                                    bucket = extra.bucket
+                                    key = dstPath
+                                    uploadId = createMultipartUploadResponse?.uploadId
+                                    this.partNumber = partNumber
+                                    body = ByteStream.fromBytes(partData)
+                                }
+                            )
+
+                            completedParts[partNumber] = CompletedPart {
+                                eTag = uploadPartResponse?.eTag
+                                this.partNumber = partNumber
+                            }
+
+                            // 更新进度
+                            val currentUploaded = uploadedBytes.addAndGet(partData.size.toLong())
+                            onUploading(currentUploaded, srcFileSize)
+
+                            log { "Part $partNumber uploaded successfully" }
+                        } catch (e: Exception) {
+                            log { "Part $partNumber upload failed: ${e.message}" }
+                            channel.cancel()
+                            throw e
+                        }
+                    }
+                }
+            }
+
+            // 等待生产者和所有消费者完成
+            producer.join()
+            consumers.forEach { it.join() }
+
+            // 按分块编号排序后完成上传
+            val sortedParts = completedParts.toSortedMap().values.toList()
 
             s3Client?.completeMultipartUpload(
                 CompleteMultipartUploadRequest {
                     bucket = extra.bucket
                     key = dstPath
                     uploadId = createMultipartUploadResponse?.uploadId
-                    multipartUpload { parts = completedParts }
+                    multipartUpload { parts = sortedParts }
                 }
             )
 

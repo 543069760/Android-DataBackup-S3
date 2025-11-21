@@ -27,6 +27,7 @@ import com.xayah.core.ui.viewmodel.UiState
 import com.xayah.core.util.GsonUtil
 import com.xayah.core.util.decodeURL
 import com.xayah.feature.main.cloud.R
+import com.xayah.core.model.database.S3NetworkType
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 
@@ -128,7 +129,8 @@ class IndexViewModel @Inject constructor(
         secretAccessKey: String,
         bucket: String,
         endpoint: String,
-        protocol: S3Protocol  // 新增参数
+        protocol: S3Protocol,  // 新增参数
+        networkType: S3NetworkType
     ) {
         val extra = GsonUtil().toJson(
             S3Extra(
@@ -137,7 +139,8 @@ class IndexViewModel @Inject constructor(
                 secretAccessKey = secretAccessKey,
                 bucket = bucket,
                 endpoint = endpoint,
-                protocol = protocol  // 新增字段
+                protocol = protocol,  // 新增字段
+                networkType = networkType
             )
         )
         emitIntent(

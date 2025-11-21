@@ -416,4 +416,8 @@
     <string name="endpoint">端点</string>
     <string name="protocol">协议</string>
     <string name="protocol_desc">选择HTTP或HTTPS协议</string>
+    <string name="network_type">网络类型</string>
+    <string name="network_type_desc">正确选择网络类型以获得最佳性能</string>
+    <string name="network_type_public">公网(公有云)</string>
+    <string name="network_type_private">内网(自建S3)</string>
 </resources>

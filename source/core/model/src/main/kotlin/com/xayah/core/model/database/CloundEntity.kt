@@ -35,12 +35,18 @@ data class S3Extra(
     val secretAccessKey: String,  // 您示例中的 secretKey
     val bucket: String,           // 如 "zctestlan-1251956900"
     val endpoint: String = "",    // 如 "cos.ap-shanghai.myqcloud.com"
-    val protocol: S3Protocol = S3Protocol.HTTPS
+    val protocol: S3Protocol = S3Protocol.HTTPS,
+    val networkType: S3NetworkType = S3NetworkType.PUBLIC  // 新增字段
 )
 
 enum class S3Protocol {
     HTTP,
     HTTPS
+}
+
+enum class S3NetworkType {
+    PUBLIC,  // 公网(公有云)
+    PRIVATE  // 内网(自建S3)
 }
 
 @Entity

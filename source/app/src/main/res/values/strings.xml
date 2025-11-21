@@ -428,4 +428,8 @@
     <string name="endpoint">Endpoint</string>
     <string name="protocol">Protocol</string>
     <string name="protocol_desc">Select HTTP or HTTPS protocol</string>
+    <string name="network_type">Network Type</string>
+    <string name="network_type_desc">Select network type for optimal performance</string>
+    <string name="network_type_public">Public Cloud</string>
+    <string name="network_type_private">Private Network</string>
 </resources>

@@ -141,6 +141,19 @@ fun PageProcessing(
         }
     }
 
+    LaunchedEffect(null) {
+        viewModel.uiEffect.collect { effect ->
+            when (effect) {
+                is IndexUiEffect.NavBack -> {
+                    navController.popBackStack()
+                }
+                else -> {
+                    // 其他 effect 由 BaseViewModel 处理
+                }
+            }
+        }
+    }
+
     val onBack: () -> Unit = remember {
         {
             if (uiState.state == OperationState.PROCESSING) {
@@ -164,7 +177,8 @@ fun PageProcessing(
         }
     }
 
-    BackHandler {
+    // 只在非处理状态下启用系统返回键 / Enable system back button only in non-processing states
+    BackHandler(enabled = uiState.state != OperationState.PROCESSING) {
         onBack()
     }
 
@@ -189,25 +203,63 @@ fun PageProcessing(
                                 navController.navigateSingle(MainRoutes.TaskDetails.getRoute(id))
                             }
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = ThemedColorSchemeKeyTokens.SecondaryContainer.value, contentColor = ThemedColorSchemeKeyTokens.OnSecondaryContainer.value)
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = ThemedColorSchemeKeyTokens.SecondaryContainer.value,
+                            contentColor = ThemedColorSchemeKeyTokens.OnSecondaryContainer.value
+                        )
                     ) {
                         Text(text = stringResource(R.string.visit_details))
                     }
                 }
 
-                Button(modifier = Modifier.fillMaxWidth(), enabled = uiState.state == OperationState.IDLE || uiState.state == OperationState.DONE, onClick = {
-                    if (uiState.state == OperationState.IDLE) viewModel.emitIntentOnIO(ProcessingUiIntent.Process)
-                    else navController.popBackStack()
-                }) {
-                    AnimatedTextContainer(targetState = if (uiState.state == OperationState.DONE) stringResource(id = R.string.finish) else stringResource(id = R.string._continue)) { text ->
+                // 取消按钮 - 在处理过程中显示 / Cancel button - shown during processing
+                AnimatedVisibility(uiState.state == OperationState.PROCESSING) {
+                    Button(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = {
+                            viewModel.launchOnIO {
+                                if (dialogState.confirm(
+                                        title = context.getString(R.string.prompt),
+                                        text = context.getString(R.string.cancel_backup_confirmation)
+                                    )) {
+                                    viewModel.emitIntent(ProcessingUiIntent.CancelAndCleanup)
+                                }
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = ThemedColorSchemeKeyTokens.ErrorContainer.value,
+                            contentColor = ThemedColorSchemeKeyTokens.OnErrorContainer.value
+                        )
+                    ) {
+                        Text(text = stringResource(R.string.cancel_backup))
+                    }
+                }
+
+                // 继续/完成按钮 / Continue/Finish button
+                Button(
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = uiState.state == OperationState.IDLE || uiState.state == OperationState.DONE,
+                    onClick = {
+                        if (uiState.state == OperationState.IDLE) viewModel.emitIntentOnIO(ProcessingUiIntent.Process)
+                        else navController.popBackStack()
+                    }
+                ) {
+                    AnimatedTextContainer(
+                        targetState = if (uiState.state == OperationState.DONE)
+                            stringResource(id = R.string.finish)
+                        else
+                            stringResource(id = R.string._continue)
+                    ) { text ->
                         Text(text = text)
                     }
                 }
             }
-
         },
-        onBackClick = {
-            onBack()
+        // 动态控制返回箭头显示 / Dynamically control back arrow visibility
+        onBackClick = if (uiState.state == OperationState.PROCESSING) {
+            null  // 备份进行中时隐藏返回箭头
+        } else {
+            { onBack() }  // 其他状态显示返回箭头
         }
     ) {
         Column(

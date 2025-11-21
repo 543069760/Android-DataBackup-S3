@@ -48,7 +48,6 @@ fun SecondaryTopBar(
     actions: @Composable RowScope.() -> Unit = {},
     onBackClick: (() -> Unit)? = null
 ) {
-    val navController = LocalNavController.current!!
     TopAppBar(
         title = {
             Column {
@@ -60,9 +59,11 @@ fun SecondaryTopBar(
         },
         scrollBehavior = scrollBehavior,
         navigationIcon = {
-            ArrowBackButton {
-                if (onBackClick != null) onBackClick.invoke()
-                else navController.maybePopBackStack()
+            // 只有当 onBackClick 不为 null 时才显示返回箭头
+            if (onBackClick != null) {
+                ArrowBackButton {
+                    onBackClick.invoke()
+                }
             }
         },
         actions = actions,
@@ -77,14 +78,15 @@ fun SecondaryMediumTopBar(
     actions: @Composable RowScope.() -> Unit = {},
     onBackClick: (() -> Unit)? = null
 ) {
-    val navController = LocalNavController.current!!
     MediumTopAppBar(
         title = { Text(text = title) },
         scrollBehavior = scrollBehavior,
         navigationIcon = {
-            ArrowBackButton {
-                if (onBackClick != null) onBackClick.invoke()
-                else navController.maybePopBackStack()
+            // 只有当 onBackClick 不为 null 时才显示返回箭头
+            if (onBackClick != null) {
+                ArrowBackButton {
+                    onBackClick.invoke()
+                }
             }
         },
         actions = actions,
@@ -99,14 +101,15 @@ fun SecondaryLargeTopBar(
     actions: @Composable RowScope.() -> Unit = {},
     onBackClick: (() -> Unit)? = null
 ) {
-    val navController = LocalNavController.current!!
     LargeTopAppBar(
         title = { Text(text = title) },
         scrollBehavior = scrollBehavior,
         navigationIcon = {
-            ArrowBackButton {
-                if (onBackClick != null) onBackClick.invoke()
-                else navController.maybePopBackStack()
+            // 只有当 onBackClick 不为 null 时才显示返回箭头
+            if (onBackClick != null) {
+                ArrowBackButton {
+                    onBackClick.invoke()
+                }
             }
         },
         actions = actions,

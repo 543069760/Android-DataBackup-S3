@@ -19,6 +19,9 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 
 interface UiState
 interface UiIntent
@@ -41,6 +44,7 @@ sealed class IndexUiEffect : UiEffect {
     ) : IndexUiEffect()
 
     data object DismissSnackbar : IndexUiEffect()
+    data object NavBack : IndexUiEffect()  // 新增 / New
 }
 
 abstract class BaseViewModel<S : UiState, I : UiIntent, E : IndexUiEffect>(state: S) : IBaseViewModel<S, I, IndexUiEffect>, ViewModel() {
@@ -48,9 +52,17 @@ abstract class BaseViewModel<S : UiState, I : UiIntent, E : IndexUiEffect>(state
     val uiState: StateFlow<S> = _uiState.asStateFlow()
     var snackbarHostState: SnackbarHostState = SnackbarHostState()
 
+    // 新增: Effect 事件流 / New: Effect event flow
+    private val _uiEffect = MutableSharedFlow<IndexUiEffect>()
+    val uiEffect: SharedFlow<IndexUiEffect> = _uiEffect.asSharedFlow()
+
     override suspend fun onEvent(state: S, intent: I) {}
 
     override suspend fun onEffect(effect: IndexUiEffect) {
+        // 先发送 Effect 到流,让 UI 层可以监听 / First emit Effect to flow for UI layer to listen
+        _uiEffect.emit(effect)
+
+        // 然后处理内部逻辑 / Then handle internal logic
         when (effect) {
             is IndexUiEffect.ShowSnackbar -> {
                 when (snackbarHostState.showSnackbar(effect.message, effect.type, effect.actionLabel, effect.withDismissAction, effect.duration)) {
@@ -66,6 +78,10 @@ abstract class BaseViewModel<S : UiState, I : UiIntent, E : IndexUiEffect>(state
 
             is IndexUiEffect.DismissSnackbar -> {
                 snackbarHostState.currentSnackbarData?.dismiss()
+            }
+
+            is IndexUiEffect.NavBack -> {
+                // UI 层处理 / Handled by UI layer
             }
         }
     }
