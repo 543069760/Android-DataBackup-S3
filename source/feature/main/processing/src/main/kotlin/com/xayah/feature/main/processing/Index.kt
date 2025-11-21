@@ -177,8 +177,7 @@ fun PageProcessing(
         }
     }
 
-    // 只在非处理状态下启用系统返回键 / Enable system back button only in non-processing states
-    BackHandler(enabled = uiState.state != OperationState.PROCESSING) {
+    BackHandler {
         onBack()
     }
 
