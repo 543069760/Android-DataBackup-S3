@@ -420,4 +420,6 @@
     <string name="network_type_desc">正确选择网络类型以获得最佳性能</string>
     <string name="network_type_public">公网(公有云)</string>
     <string name="network_type_private">内网(自建S3)</string>
+    <string name="cancel_backup">取消备份</string>
+    <string name="cancel_restore">取消恢复</string>
 </resources>

@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools">
     <string name="canceling">Canceling…</string>
-    <string name="cancel_backup">Cancel Backup</string>
     <string name="cancel_backup_confirmation">Are you sure you want to cancel? Only the currently processing items will be deleted. Completed backups will be kept.</string>
     <string name="deleting_incomplete_backups">Deleting incomplete backups to prevent data corruption. Please do not close this page.</string>
+    <string name="cancel_backup">Cancel backup</string>
+    <string name="cancel_restore">Cancel restore</string>
 </resources>

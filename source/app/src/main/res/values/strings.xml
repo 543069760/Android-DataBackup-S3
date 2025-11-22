@@ -97,6 +97,8 @@
     <string name="restore_user_desc">Which user do you want to restore to?</string>
     <string name="restore_completed">Restoring completed</string>
     <string name="backup">Backup</string>
+    <string name="cancel_backup">Cancel backup</string>
+    <string name="cancel_restore">Cancel restore</string>
     <string name="backup_itself">Backup itself</string>
     <string name="backup_itself_desc">Copy the APK to the backup folder after backing up</string>
     <string name="compression_test">Compression test</string>

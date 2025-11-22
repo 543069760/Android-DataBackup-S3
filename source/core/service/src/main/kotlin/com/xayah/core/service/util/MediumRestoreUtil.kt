@@ -113,11 +113,29 @@ class MediumRestoreUtil @Inject constructor(
         if (client.exists(src)) {
             var flag = true
             var progress = 0.0
+            var total = 0.0
+            var lastWritten = 0L
+            var lastTime = System.currentTimeMillis()
+            val startTime = System.currentTimeMillis()  // 添加开始时间,用于计算平均速度
+
             with(CoroutineScope(coroutineContext)) {
                 launch {
                     while (flag) {
-                        t.updateInfo(content = progress.formatSize())
-                        delay(500)
+                        delay(300)
+                        val currentTime = System.currentTimeMillis()
+                        val timeDiff = currentTime - lastTime
+                        val bytesDiff = progress.toLong() - lastWritten
+                        val speed = if (timeDiff > 0) (bytesDiff * 1000 / timeDiff) else 0L
+                        val speedText = speed.toDouble().formatSize()
+                        val percentage = if (total > 0) (progress / total * 100).toInt() else 0
+
+                        // 只在速度大于0或者是第一次更新时才显示
+                        if (speed > 0 || lastWritten == 0L) {
+                            t.updateInfo(content = "$speedText/s | $percentage%")
+                        }
+
+                        lastWritten = progress.toLong()
+                        lastTime = currentTime
                     }
                 }
             }
@@ -125,15 +143,24 @@ class MediumRestoreUtil @Inject constructor(
             cloudRepository.download(client = client,
                 src = src,
                 dstDir = dstDir,
-                onDownloading = { written, _ -> progress = written.toDouble() },
+                onDownloading = { written, totalBytes ->  // 接收两个参数
+                    progress = written.toDouble()
+                    total = totalBytes.toDouble()
+                },
                 onDownloaded = {
                     onDownloaded(m, t, dstDir)
                 }
             ).apply {
                 flag = false
+
+                // 计算整个下载过程的平均速度
+                val totalTime = System.currentTimeMillis() - startTime
+                val avgSpeed = if (totalTime > 0) (progress.toLong() * 1000 / totalTime) else 0L
+                val avgSpeedText = avgSpeed.toDouble().formatSize()
+
                 t.updateInfo(
                     log = (t.getLog() + "\n${outString}").trim(),
-                    content = progress.formatSize()
+                    content = "$avgSpeedText/s | 100%"  // 显示平均速度和100%
                 )
                 if (isSuccess.not()) {
                     t.updateInfo(state = OperationState.ERROR)

@@ -28,10 +28,14 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import java.io.File
+import java.io.InputStream
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.min
 import kotlin.math.max
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
 class S3ClientImpl(
     private val entity: CloudEntity,
@@ -459,14 +463,77 @@ class S3ClientImpl(
             log { "download: $src to $dstPath" }
 
             val srcKey = normalizeObjectKey(src)
-            s3Client?.getObject(GetObjectRequest {
+
+            // 先调用 HEAD 方法获取对象大小
+            val headResponse = s3Client?.headObject(HeadObjectRequest {
                 bucket = extra.bucket
                 key = srcKey
-            }) { resp ->
-                val dstFile = File(dstPath)
-                resp.body?.writeToFile(dstFile)
-                val fileSize = dstFile.length()
-                onDownloading(fileSize, fileSize)
+            })
+            val totalSize = headResponse?.contentLength ?: -1L
+            log { "HEAD response: total size = $totalSize" }
+
+            try {
+                s3Client?.getObject(GetObjectRequest {
+                    bucket = extra.bucket
+                    key = srcKey
+                }) { resp ->
+                    val dstFile = File(dstPath)
+
+                    dstFile.parentFile?.mkdirs()
+                    log { "Starting download, total size: $totalSize" }
+
+                    coroutineScope {
+                        val progressJob = launch {
+                            var lastSize = 0L
+                            var lastProgressTime = System.currentTimeMillis()
+
+                            while (isActive) {
+                                delay(300)
+
+                                val currentSize = try {
+                                    if (dstFile.exists()) dstFile.length() else 0L
+                                } catch (e: Exception) {
+                                    lastSize
+                                }
+
+                                val currentTime = System.currentTimeMillis()
+                                log { "Progress check: currentSize=$currentSize, totalSize=$totalSize, exists=${dstFile.exists()}" }
+
+                                if (currentSize != lastSize) {
+                                    onDownloading(currentSize, totalSize)
+                                    log { "Progress updated: $currentSize / $totalSize" }
+                                    lastSize = currentSize
+                                    lastProgressTime = currentTime
+                                }
+
+                                if (totalSize > 0 && currentSize >= totalSize) {
+                                    break
+                                }
+
+                                // 安全退出：5秒无进度变化
+                                if (currentTime - lastProgressTime > 5000 && currentSize > 0) {
+                                    log { "No progress for 5 seconds, assuming completion" }
+                                    break
+                                }
+                            }
+                        }
+
+                        try {
+                            resp.body?.writeToFile(dstFile)
+                            val finalSize = dstFile.length()
+                            onDownloading(finalSize, totalSize)
+                            log { "Download completed: $finalSize bytes" }
+                        } catch (e: Exception) {
+                            log { "Download error: ${e.message}" }
+                            throw e
+                        } finally {
+                            progressJob.cancel()
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                log { "S3 operation failed: ${e.message}" }
+                throw e
             }
         }
     }

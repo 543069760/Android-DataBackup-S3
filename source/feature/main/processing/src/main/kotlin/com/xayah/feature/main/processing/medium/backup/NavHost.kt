@@ -13,6 +13,7 @@ import com.xayah.core.ui.component.AnimatedNavHost
 import com.xayah.core.ui.route.MainRoutes
 import com.xayah.feature.main.processing.PageProcessing
 import com.xayah.feature.main.processing.R
+import com.xayah.core.model.OpType
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 
 @ExperimentalCoroutinesApi
@@ -41,7 +42,8 @@ fun MediumBackupProcessingGraph() {
                 finishedTitleId = R.string.backup_completed,
                 finishedSubtitleId = R.string.args_files_backed_up,
                 finishedWithErrorsSubtitleId = R.string.args_files_backed_up_and_failed,
-                viewModel = viewModel
+                viewModel = viewModel,
+                opType = OpType.BACKUP  // 添加这一行
             )
         }
         composable(MainRoutes.MediumBackupProcessingSetup.route) {

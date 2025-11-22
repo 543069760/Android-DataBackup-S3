@@ -11,6 +11,7 @@ import androidx.navigation.compose.rememberNavController
 import com.xayah.core.model.OperationState
 import com.xayah.core.ui.component.AnimatedNavHost
 import com.xayah.core.ui.route.MainRoutes
+import com.xayah.core.model.OpType
 import com.xayah.feature.main.processing.PageProcessing
 import com.xayah.feature.main.processing.R
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -41,7 +42,8 @@ fun PackagesBackupProcessingGraph() {
                 finishedTitleId = R.string.backup_completed,
                 finishedSubtitleId = R.string.args_apps_backed_up,
                 finishedWithErrorsSubtitleId = R.string.args_apps_backed_up_and_failed,
-                viewModel = viewModel
+                viewModel = viewModel,
+                opType = OpType.BACKUP  // 添加这一行
             )
         }
         composable(MainRoutes.PackagesBackupProcessingSetup.route) {

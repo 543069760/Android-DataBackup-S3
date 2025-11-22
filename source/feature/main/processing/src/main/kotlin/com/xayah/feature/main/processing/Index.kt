@@ -54,6 +54,7 @@ import com.xayah.core.ui.component.ProcessingCard
 import com.xayah.core.ui.component.SegmentCircularProgressIndicator
 import com.xayah.core.ui.component.Surface
 import com.xayah.core.ui.component.confirm
+import com.xayah.core.model.OpType
 import com.xayah.core.ui.component.paddingBottom
 import com.xayah.core.ui.component.paddingHorizontal
 import com.xayah.core.ui.component.paddingTop
@@ -86,7 +87,8 @@ fun PageProcessing(
     finishedTitleId: Int,
     finishedSubtitleId: Int,
     finishedWithErrorsSubtitleId: Int,
-    viewModel: AbstractProcessingViewModel
+    viewModel: AbstractProcessingViewModel,
+    opType: OpType  // 添加这个参数
 ) {
     val context = LocalContext.current
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -228,7 +230,10 @@ fun PageProcessing(
                             contentColor = ThemedColorSchemeKeyTokens.OnErrorContainer.value
                         )
                     ) {
-                        Text(text = stringResource(R.string.cancel_backup))
+                        Text(text = stringResource(
+                            if (opType == OpType.BACKUP) R.string.cancel_backup
+                            else R.string.cancel_restore
+                        ))
                     }
                 }
 

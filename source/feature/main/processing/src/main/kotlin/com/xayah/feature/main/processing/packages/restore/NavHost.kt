@@ -13,6 +13,7 @@ import com.xayah.core.ui.component.AnimatedNavHost
 import com.xayah.core.ui.route.MainRoutes
 import com.xayah.feature.main.processing.PageProcessing
 import com.xayah.feature.main.processing.R
+import com.xayah.core.model.OpType
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 
 @ExperimentalCoroutinesApi
@@ -41,7 +42,8 @@ fun PackagesRestoreProcessingGraph() {
                 finishedTitleId = R.string.restore_completed,
                 finishedSubtitleId = R.string.args_apps_restored,
                 finishedWithErrorsSubtitleId = R.string.args_apps_restored_and_failed,
-                viewModel = viewModel
+                viewModel = viewModel,
+                opType = OpType.RESTORE  // 添加这一行
             )
         }
         composable(MainRoutes.PackagesRestoreProcessingSetup.route) {
