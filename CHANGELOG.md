@@ -1,3 +1,78 @@
+## 2025-11-24
+### 新增功能
+
+**实现 S3 uploadId 持久化机制以自动清理未完成的分块上传**
+
+#### 核心功能
+
+通过数据库持久化 uploadId,实现了完整的 S3 分块上传碎片管理方案,能够处理主动取消、崩溃和网络异常等所有场景下的碎片清理。
+
+#### 技术实现
+
+##### 1. 数据库层
+- 创建 `UploadIdEntity` 实体类,包含 `id`、`uploadId`、`bucket`、`key`、`timestamp` 和 `cloudName` 字段
+- 创建 `UploadIdDao` 接口,提供 `insert()`、`deleteByUploadId()`、`getAll()` 和 `deleteById()` 方法
+- 数据库版本从 8 升级到 9
+- 添加 `MIGRATION_8_9` 迁移脚本,创建 `UploadIdEntity` 表
+- 在 `DatabaseModule` 中提供 `provideUploadIdDao()` 依赖注入
+
+##### 2. S3 客户端层
+- `S3ClientImpl` 构造函数注入 `uploadIdDao` 参数
+- 在 `upload()` 方法的三个关键时刻管理 uploadId:
+    * **创建时记录**: `createMultipartUpload` 后立即插入 `UploadIdEntity` 到数据库
+    * **完成时删除**: `completeMultipartUpload` 成功后删除数据库记录
+    * **取消时清理**: catch 块中调用 `abortMultipartUpload` 并删除记录
+- 添加 `companion object` 静态方法 `cleanupOrphanedUpload()`,用于启动时清理
+
+##### 3. Repository 层
+- `CloudRepository` 构造函数注入 `uploadIdDao` 参数
+- `getClient()` 和 `withActivatedClients()` 方法传递 `uploadIdDao` 给 `getCloud()`
+- 保持架构分层清晰,避免 feature 模块直接依赖 database 模块
+
+##### 4. 应用启动层
+- `DataBackupApplication.onCreate()` 中实现启动时清理逻辑
+- 使用 `GlobalScope.launch(Dispatchers.IO)` 在后台线程执行
+- 查询所有残留的 `uploadId` 记录
+- 逐个调用 `S3ClientImpl.cleanupOrphanedUpload()` 清理 S3 碎片
+- 删除数据库记录
+- 完善的异常处理和日志记录
+
+##### 5. 接口层改进
+- `CloudEntity.getCloud()` 扩展函数添加 `uploadIdDao` 参数
+- 只有 S3 协议需要传递该参数,其他协议保持不变
+- 所有调用 `getCloud()` 的地方更新为使用 `CloudRepository.getClient()`
+
+#### 工作流程
+
+1. **正常上传流程**:
+    - 创建分块上传 → 记录 uploadId 到数据库
+    - 上传所有分块 → 完成上传
+    - 删除数据库记录
+
+2. **取消上传流程**:
+    - 用户点击取消 → 抛出 CancellationException
+    - 调用 abortMultipartUpload 清理 S3 碎片
+    - 删除数据库记录
+
+3. **崩溃恢复流程**:
+    - App 重启 → DataBackupApplication.onCreate()
+    - 查询所有残留的 uploadId
+    - 逐个调用 S3 接口清理碎片
+    - 删除数据库记录
+
+#### 架构优势
+
+- **模块职责清晰**: S3 相关逻辑封装在 `core:network` 模块
+- **依赖注入完整**: 通过 Hilt 和 Repository 层传递依赖
+- **架构分层清晰**: feature 模块不直接依赖 database 模块
+- **代码复用**: 静态方法 `cleanupOrphanedUpload()` 复用 S3 客户端配置逻辑
+
+#### 向后兼容性
+
+- 数据库迁移自动执行,不影响现有数据
+- 旧版本备份数据完全兼容
+- 其他云存储协议(FTP/SFTP/WebDAV/SMB)不受影响
+
 ## 2025-11-22
 
 ### 修复

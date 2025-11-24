@@ -120,6 +120,7 @@ dependencies {
     implementation(project(":core:work"))
     compileOnly(project(":core:hiddenapi"))
     implementation(project(":core:rootservice"))
+    implementation(project(":core:network"))
 
     // Feature
     implementation(project(":feature:crash"))

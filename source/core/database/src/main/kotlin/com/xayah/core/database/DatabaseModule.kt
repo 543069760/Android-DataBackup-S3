@@ -8,6 +8,7 @@ import com.xayah.core.database.dao.LabelDao
 import com.xayah.core.database.dao.MediaDao
 import com.xayah.core.database.dao.PackageDao
 import com.xayah.core.database.dao.TaskDao
+import com.xayah.core.database.dao.UploadIdDao  // 新增
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -23,7 +24,10 @@ object DatabaseModule {
     fun provideDatabase(@ApplicationContext context: Context): AppDatabase =
         Room.databaseBuilder(context, AppDatabase::class.java, "database-databackup")
             .enableMultiInstanceInvalidation()
-            .addMigrations(DatabaseMigrations.MIGRATION_7_8)  // 添加这一行
+            .addMigrations(
+                DatabaseMigrations.MIGRATION_7_8,
+                DatabaseMigrations.MIGRATION_8_9  // 添加这个
+            )
             .build()
 
     @Provides
@@ -49,4 +53,8 @@ object DatabaseModule {
     @Provides
     @Singleton
     fun provideLabelDao(database: AppDatabase): LabelDao = database.labelDao()
+
+    @Provides
+    @Singleton
+    fun provideUploadIdDao(database: AppDatabase): UploadIdDao = database.uploadIdDao()
 }

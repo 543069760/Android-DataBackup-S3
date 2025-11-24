@@ -24,6 +24,8 @@ import com.xayah.libpickyou.parcelables.DirChildrenParcelable
 import com.xayah.libpickyou.parcelables.FileParcelable
 import com.xayah.libpickyou.ui.model.PickerType
 import com.xayah.core.model.database.S3NetworkType
+import com.xayah.core.model.database.UploadIdEntity
+import com.xayah.core.database.dao.UploadIdDao
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
@@ -39,7 +41,8 @@ import kotlinx.coroutines.isActive
 
 class S3ClientImpl(
     private val entity: CloudEntity,
-    private val extra: S3Extra
+    private val extra: S3Extra,
+    private val uploadIdDao: UploadIdDao
 ) : CloudClient {
     private var s3Client: S3Client? = null
 
@@ -50,6 +53,50 @@ class S3ClientImpl(
 
     private fun normalizeObjectKey(path: String): String {
         return path.trim('/').replace("//", "/")
+    }
+
+    companion object {
+        suspend fun cleanupOrphanedUpload(
+            uploadIdEntity: UploadIdEntity,
+            cloudEntity: CloudEntity
+        ) {
+            val extra: S3Extra = GsonUtil().fromJson(cloudEntity.extra, S3Extra::class.java) ?: return
+
+            val s3Client = S3Client {
+                region = if (extra.endpoint.isNotEmpty()) {
+                    extra.region.ifEmpty { "us-east-1" }
+                } else {
+                    extra.region
+                }
+                credentialsProvider = object : CredentialsProvider {
+                    override suspend fun resolve(attributes: aws.smithy.kotlin.runtime.collections.Attributes): Credentials {
+                        return Credentials(
+                            accessKeyId = extra.accessKeyId,
+                            secretAccessKey = extra.secretAccessKey
+                        )
+                    }
+                }
+                if (extra.endpoint.isNotEmpty()) {
+                    val scheme = when (extra.protocol) {
+                        S3Protocol.HTTP -> "http"
+                        S3Protocol.HTTPS -> "https"
+                    }
+                    endpointUrl = Url.parse("$scheme://${extra.endpoint}")
+                }
+            }
+
+            try {
+                s3Client.abortMultipartUpload(
+                    AbortMultipartUploadRequest {
+                        bucket = uploadIdEntity.bucket
+                        key = uploadIdEntity.key
+                        uploadId = uploadIdEntity.uploadId
+                    }
+                )
+            } finally {
+                s3Client.close()
+            }
+        }
     }
 
     override fun connect() {
@@ -103,199 +150,6 @@ class S3ClientImpl(
         mkdir(dst)
     }
 
-    override fun renameTo(
-        src: String,
-        dst: String,
-        onProgress: ((currentPart: Int, totalParts: Int, currentFile: Int, totalFiles: Int) -> Unit)?
-    ) {
-        runBlocking {
-            try {
-                log { "renameTo: $src to $dst" }
-
-                val srcPrefix = normalizeObjectKey(src) + "/"
-                val dstPrefix = normalizeObjectKey(dst) + "/"
-
-                val listResponse = s3Client?.listObjectsV2(ListObjectsV2Request {
-                    bucket = extra.bucket
-                    prefix = srcPrefix
-                })
-
-                val objectsToDelete = listResponse?.contents?.filter {
-                    !it.key.isNullOrEmpty() && !it.key!!.endsWith("/")
-                } ?: emptyList()
-
-                if (objectsToDelete.isEmpty()) {
-                    log { "No objects found to rename" }
-                    return@runBlocking
-                }
-
-                val totalFiles = objectsToDelete.size
-                log { "Found $totalFiles objects to copy" }
-
-                objectsToDelete.forEachIndexed { fileIndex, obj ->
-                    val srcKey = obj.key ?: return@forEachIndexed
-                    val dstKey = srcKey.replaceFirst(srcPrefix, dstPrefix)
-
-                    log { "Processing file ${fileIndex + 1}/$totalFiles: $srcKey -> $dstKey" }
-
-                    val headResponse = s3Client?.headObject(HeadObjectRequest {
-                        bucket = extra.bucket
-                        key = srcKey
-                    })
-                    val objectSize = headResponse?.contentLength ?: 0L
-
-                    val partSizes = calculateExponentialPartSize(objectSize)
-                    val totalParts = partSizes.size
-                    log { "Calculated $totalParts parts with exponential sizing" }
-
-                    val createMultipartUploadResponse = s3Client?.createMultipartUpload(
-                        CreateMultipartUploadRequest {
-                            bucket = extra.bucket
-                            key = dstKey
-                        }
-                    )
-
-                    val completedParts = mutableListOf<CompletedPart>()
-                    var copied = 0L
-
-                    partSizes.forEachIndexed { index, partSize ->
-                        val pn = index + 1
-                        val currentPartSize = min(partSize, objectSize - copied)
-
-                        // 报告进度
-                        onProgress?.invoke(pn, totalParts, fileIndex + 1, totalFiles)
-                        log { "File ${fileIndex + 1}/$totalFiles, Part $pn/$totalParts, size: ${currentPartSize / 1024 / 1024}MB" }
-
-                        val uploadPartCopyRequest = UploadPartCopyRequest {
-                            bucket = extra.bucket
-                            key = dstKey
-                            uploadId = createMultipartUploadResponse?.uploadId
-                            partNumber = pn
-                            copySource = "${extra.bucket}/$srcKey"
-                            copySourceRange = "bytes=$copied-${copied + currentPartSize - 1}"
-                        }
-
-                        val uploadPartCopyResponse = uploadPartCopyWithRetry(uploadPartCopyRequest)
-                        completedParts.add(
-                            CompletedPart {
-                                eTag = uploadPartCopyResponse?.copyPartResult?.eTag
-                                partNumber = pn
-                            }
-                        )
-
-                        copied += currentPartSize
-                    }
-
-                    s3Client?.completeMultipartUpload(
-                        CompleteMultipartUploadRequest {
-                            bucket = extra.bucket
-                            key = dstKey
-                            uploadId = createMultipartUploadResponse?.uploadId
-                            multipartUpload { parts = completedParts }
-                        }
-                    )
-
-                    log { "Successfully copied file ${fileIndex + 1}/$totalFiles: $srcKey to $dstKey" }
-                }
-
-                // 批量删除源对象
-                val objectIdentifiers = objectsToDelete.mapNotNull { obj ->
-                    obj.key?.let { key ->
-                        ObjectIdentifier { this.key = key }
-                    }
-                }
-
-                if (objectIdentifiers.isNotEmpty()) {
-                    s3Client?.deleteObjects(DeleteObjectsRequest {
-                        bucket = extra.bucket
-                        delete = Delete { objects = objectIdentifiers }
-                    })
-                }
-
-                log { "renameTo completed successfully" }
-            } catch (e: Exception) {
-                log { "renameTo failed: ${e.message}" }
-                throw e
-            }
-        }
-    }
-
-    /**
-     * 带重试的 uploadPartCopy
-     */
-    private suspend fun uploadPartCopyWithRetry(
-        request: UploadPartCopyRequest,
-        maxRetries: Int = 3,
-        retryDelayMs: Long = 1000
-    ): UploadPartCopyResponse? {
-        var lastException: Exception? = null
-
-        repeat(maxRetries) { attempt ->
-            try {
-                log { "uploadPartCopy attempt ${attempt + 1}/$maxRetries" }
-                return s3Client?.uploadPartCopy(request)
-            } catch (e: Exception) {
-                lastException = e
-                log { "uploadPartCopy failed on attempt ${attempt + 1}: ${e.message}" }
-
-                if (attempt < maxRetries - 1) {
-                    // 指数退避: 每次重试延迟翻倍
-                    val delay = retryDelayMs * (1 shl attempt)
-                    log { "Retrying after ${delay}ms..." }
-                    kotlinx.coroutines.delay(delay)
-                }
-            }
-        }
-
-        log { "uploadPartCopy failed after $maxRetries attempts" }
-        throw lastException ?: Exception("Upload part copy failed")
-    }
-
-    /**
-     * 为 copy 场景计算指数级增长的分块大小
-     * 策略: 从较小的分块开始,呈指数级增长,同时确保不超过 10000 个分块
-     */
-    /**
-     * 为 copy 场景计算指数级增长的分块大小
-     * 策略: 从较小的分块开始,呈指数级增长,同时确保不超过 10000 个分块
-     */
-    private fun calculateExponentialPartSize(fileSize: Long): List<Long> {
-        val maxParts = 10000L
-        val minPartSize = 100L * 1024 * 1024  // 100MB
-
-        // 计算理论上的最大分块大小,确保能处理当前文件
-        val theoreticalMaxPartSize = (fileSize + maxParts - 1) / maxParts
-
-        // 实际最大分块大小取理论值和 5GB 的较大值
-        val maxPartSize = max(theoreticalMaxPartSize, 5L * 1024 * 1024 * 1024)
-
-        // 计算指数级增长的分块
-        val partSizes = mutableListOf<Long>()
-        var remaining = fileSize
-        var currentPartSize = minPartSize
-
-        while (remaining > 0 && partSizes.size < maxParts) {
-            val actualPartSize = min(currentPartSize, min(remaining, maxPartSize))
-            partSizes.add(actualPartSize)
-            remaining -= actualPartSize
-
-            // 指数增长: 每 10 个分块,大小翻倍
-            if (partSizes.size % 10 == 0) {
-                currentPartSize = min(currentPartSize * 2, maxPartSize)
-            }
-        }
-
-        // 如果还有剩余数据,说明分块策略有问题,需要调整
-        if (remaining > 0) {
-            log { "Warning: File too large for current chunking strategy, remaining: $remaining bytes" }
-            // 将剩余数据平均分配到最后几个分块
-            val avgSize = (fileSize + maxParts - 1) / maxParts
-            return List(maxParts.toInt()) { avgSize }
-        }
-
-        return partSizes
-    }
-
     private fun calculatePartSize(fileSize: Long): Long {
         val maxParts = 10000L
         val minPartSize = 10L * 1024 * 1024  // 10MB
@@ -306,6 +160,15 @@ class S3ClientImpl(
             calculatedSize < minPartSize -> minPartSize
             else -> calculatedSize
         }
+    }
+
+    override fun renameTo(
+        src: String,
+        dst: String,
+        onProgress: ((currentPart: Int, totalParts: Int, currentFile: Int, totalFiles: Int) -> Unit)?
+    ) {
+        // S3 不再需要 renameTo 操作,因为备份完全基于时间戳
+        log { "renameTo is deprecated for S3, skipping: $src to $dst" }
     }
 
     override fun upload(src: String, dst: String, onUploading: (read: Long, total: Long) -> Unit, isCanceled: (() -> Boolean)?) {
@@ -324,6 +187,16 @@ class S3ClientImpl(
                     key = dstPath
                 }
             )
+
+// 立即持久化 uploadId
+            val uploadIdEntity = UploadIdEntity(
+                uploadId = createMultipartUploadResponse?.uploadId ?: "",
+                bucket = extra.bucket,
+                key = dstPath,
+                timestamp = System.currentTimeMillis(),
+                cloudName = entity.name
+            )
+            val recordId = uploadIdDao.insert(uploadIdEntity)
 
             // 根据网络类型动态设置并发数
             val concurrency = when (extra.networkType) {
@@ -424,7 +297,12 @@ class S3ClientImpl(
                 producer.join()
                 consumers.forEach { it.join() }
 
-                // 按分块编号排序后完成上传
+                // 显式检查取消状态
+                if (isCanceled?.invoke() == true) {
+                    throw kotlinx.coroutines.CancellationException("Upload canceled")
+                }
+
+                // 正常完成逻辑必须在 try 块内
                 val sortedParts = completedParts.toSortedMap().values.toList()
 
                 s3Client?.completeMultipartUpload(
@@ -435,8 +313,9 @@ class S3ClientImpl(
                         multipartUpload { parts = sortedParts }
                     }
                 )
-
+                uploadIdDao.deleteByUploadId(createMultipartUploadResponse?.uploadId ?: "")
                 onUploading(srcFileSize, srcFileSize)
+
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // 取消时中止分片上传
                 log { "Upload canceled, aborting multipart upload" }
@@ -448,6 +327,7 @@ class S3ClientImpl(
                             uploadId = createMultipartUploadResponse?.uploadId
                         }
                     )
+                    uploadIdDao.deleteByUploadId(createMultipartUploadResponse?.uploadId ?: "")
                 }.onFailure { abortError ->
                     log { "Failed to abort multipart upload: ${abortError.message}" }
                 }

@@ -256,4 +256,20 @@ object DatabaseMigrations {
             )
         }
     }
+
+    val MIGRATION_8_9 = object : Migration(8, 9) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            // 创建 UploadIdEntity 表
+            database.execSQL(
+                """CREATE TABLE IF NOT EXISTS UploadIdEntity (  
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,  
+                uploadId TEXT NOT NULL,  
+                bucket TEXT NOT NULL,  
+                key TEXT NOT NULL,  
+                timestamp INTEGER NOT NULL,  
+                cloudName TEXT NOT NULL  
+            )"""
+            )
+        }
+    }
 }

@@ -41,7 +41,7 @@ class IndexViewModel @Inject constructor(
                     )
                 )
                 runCatching {
-                    val client = intent.entity.getCloud()
+                    val (client, _) = cloudRepo.getClient(intent.entity.name)
                     client.testConnection()
                     emitEffect(IndexUiEffect.DismissSnackbar)
                     emitEffectOnIO(IndexUiEffect.ShowSnackbar(type = SnackbarType.Success, message = cloudRepo.getString(R.string.connection_established)))

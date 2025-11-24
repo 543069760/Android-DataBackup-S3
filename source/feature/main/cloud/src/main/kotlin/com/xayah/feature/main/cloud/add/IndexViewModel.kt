@@ -225,8 +225,9 @@ class IndexViewModel @Inject constructor(
                     )
                 )
                 runCatching {
-                    val client = state.cloudEntity!!.getCloud()
-                    client.testConnection()
+                    cloudRepo.withClient(state.cloudEntity!!.name) { client, _ ->
+                        client.testConnection()
+                    }
                     emitEffect(IndexUiEffect.DismissSnackbar)
                     emitEffectOnIO(IndexUiEffect.ShowSnackbar(type = SnackbarType.Success, message = cloudRepo.getString(R.string.connection_established)))
                 }.onFailure {
@@ -256,14 +257,12 @@ class IndexViewModel @Inject constructor(
                     )
                 )
                 runCatching {
-                    val client = uiState.value.cloudEntity!!.getCloud()
-                    client.setRemote(
-                        context = context,
-                        onSet = { remote, extraString ->
+                    cloudRepo.withClient(uiState.value.cloudEntity!!.name) { client, _ ->
+                        client.setRemote(context) { remote, extraString ->
                             emitState(uiState.value.copy(cloudEntity = uiState.value.cloudEntity!!.copy(remote = remote, extra = extraString)))
                             emitEffect(IndexUiEffect.DismissSnackbar)
                         }
-                    )
+                    }
                 }.onFailure {
                     emitEffect(IndexUiEffect.DismissSnackbar)
                     if (it.localizedMessage != null)

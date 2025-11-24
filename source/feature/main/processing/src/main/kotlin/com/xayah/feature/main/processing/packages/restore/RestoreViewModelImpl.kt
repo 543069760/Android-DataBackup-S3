@@ -97,7 +97,7 @@ class RestoreViewModelImpl @Inject constructor(
                         )
                     )
                     runCatching {
-                        val client = state.cloudEntity!!.getCloud()
+                        val (client, _) = mCloudRepo.getClient(state.cloudEntity!!.name)
                         client.testConnection()
                         emitEffect(IndexUiEffect.DismissSnackbar)
                         withMainContext {

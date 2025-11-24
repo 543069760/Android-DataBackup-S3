@@ -10,6 +10,7 @@ import com.xayah.core.database.dao.LabelDao
 import com.xayah.core.database.dao.MediaDao
 import com.xayah.core.database.dao.PackageDao
 import com.xayah.core.database.dao.TaskDao
+import com.xayah.core.database.dao.UploadIdDao  // 新增
 import com.xayah.core.database.util.StringListConverters
 import com.xayah.core.model.database.CloudEntity
 import com.xayah.core.model.database.DirectoryEntity
@@ -22,9 +23,10 @@ import com.xayah.core.model.database.ProcessingInfoEntity
 import com.xayah.core.model.database.TaskDetailMediaEntity
 import com.xayah.core.model.database.TaskDetailPackageEntity
 import com.xayah.core.model.database.TaskEntity
+import com.xayah.core.model.database.UploadIdEntity  // 新增
 
 @Database(
-    version = 8,
+    version = 9,  // 升级版本
     exportSchema = true,
     entities = [
         PackageEntity::class,
@@ -38,6 +40,7 @@ import com.xayah.core.model.database.TaskEntity
         LabelEntity::class,
         LabelAppCrossRefEntity::class,
         LabelFileCrossRefEntity::class,
+        UploadIdEntity::class,  // 新增
     ],
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
@@ -56,4 +59,5 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun directoryDao(): DirectoryDao
     abstract fun cloudDao(): CloudDao
     abstract fun labelDao(): LabelDao
+    abstract fun uploadIdDao(): UploadIdDao
 }
