@@ -165,10 +165,11 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
 
         // 1. 删除远程文件并标记/删除数据库记录 - 只处理未完成的媒体(index >= currentIndex)
         mMediaEntities.forEachIndexed { index, media ->
-            if (index >= currentIndex && media.mediaEntity.indexInfo.backupTimestamp == timestamp) {
-                val m = media.mediaEntity
+            val m = media.mediaEntity
+            // 只删除时间戳匹配且状态不是 DONE 的媒体
+            if (index >= currentIndex - 1 && media.mediaEntity.indexInfo.backupTimestamp == timestamp) {
                 val remoteFileDir = getRemoteFileDir(m.archivesRelativeDir)
-                log { "Cleaning up incomplete backup at: $remoteFileDir (index: $index)" }
+                log { "Cleaning up incomplete backup: ${m.name} at $remoteFileDir" }
 
                 // 删除远程文件
                 runCatching {
@@ -179,24 +180,14 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
                     log { "Failed to cleanup: ${e.message}" }
                 }
 
-                // 标记这个特定的媒体为已取消
-                log { "Marking media ${m.name} as canceled" }
+                // 标记和删除数据库记录
                 runCatching {
                     mMediaDao.markAsCanceledByTimestamp(timestamp, m.name)
-                }.onSuccess {
-                    log { "Successfully marked media as canceled" }
-                }.onFailure { e ->
-                    log { "Failed to mark media as canceled: ${e.message}" }
-                }
-
-                // 删除这个特定媒体的数据库记录(仅删除 RESTORE 类型)
-                log { "Deleting canceled media ${m.name} from database (OpType.RESTORE only)" }
-                runCatching {
                     mMediaDao.deleteCanceledByTimestamp(timestamp, OpType.RESTORE, m.name)
                 }.onSuccess {
-                    log { "Successfully deleted canceled media from database" }
+                    log { "Successfully deleted media from database" }
                 }.onFailure { e ->
-                    log { "Failed to delete canceled media: ${e.message}" }
+                    log { "Failed to delete media: ${e.message}" }
                 }
             }
         }

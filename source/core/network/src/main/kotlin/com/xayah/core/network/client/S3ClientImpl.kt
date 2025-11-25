@@ -101,8 +101,6 @@ class S3ClientImpl(
 
     override fun connect() {
         s3Client = S3Client {
-            // 如果有自定义 endpoint,region 可以是任意值
-            // 否则使用用户提供的 region 或默认值
             region = if (extra.endpoint.isNotEmpty()) {
                 extra.region.ifEmpty { "us-east-1" }
             } else {
@@ -117,14 +115,20 @@ class S3ClientImpl(
                 }
             }
             if (extra.endpoint.isNotEmpty()) {
-                // 根据协议配置构建endpoint URL
                 val scheme = when (extra.protocol) {
                     S3Protocol.HTTP -> "http"
                     S3Protocol.HTTPS -> "https"
                 }
                 endpointUrl = Url.parse("$scheme://${extra.endpoint}")
             }
+
+            // 启用详细日志
+            logMode = aws.smithy.kotlin.runtime.client.LogMode.LogRequest +
+                    aws.smithy.kotlin.runtime.client.LogMode.LogResponse
         }
+
+        log { "S3Client connected with endpoint: ${s3Client?.config?.endpointUrl}" }
+        log { "S3Client region: ${s3Client?.config?.region}" }
     }
 
     override fun disconnect() {
@@ -430,38 +434,104 @@ class S3ClientImpl(
 
     override fun removeDirectory(src: String): Boolean {
         log { "removeDirectory: $src" }
+
+        // 检查连接状态,如果断开则重新连接
+        if (s3Client == null) {
+            log { "S3Client is null, reconnecting..." }
+            connect()
+        }
+
+        log { "S3Client state: ${if (s3Client != null) "connected" else "null"}" }
+        log { "Extra endpoint: ${extra.endpoint}" }
+        log { "Extra bucket: ${extra.bucket}" }
+
         return runBlocking {
             try {
                 val prefix = normalizeObjectKey(src) + "/"
-                log { "Listing objects with prefix: $prefix" }  // 添加日志
+                log { "Listing objects with prefix: $prefix" }
+                log { "Using bucket: ${extra.bucket}" }
+                log { "S3 client endpoint: ${s3Client?.config?.endpointUrl}" }
+                log { "S3 client region: ${s3Client?.config?.region}" }
 
-                val listResponse = s3Client?.listObjectsV2(ListObjectsV2Request {
+                val listRequest = ListObjectsV2Request {
                     bucket = extra.bucket
                     this.prefix = prefix
-                })
+                }
+
+                // 打印请求详情
+                log { "ListObjectsV2Request details:" }
+                log { "  - bucket: ${extra.bucket}" }
+                log { "  - prefix: $prefix" }
+                log { "  - delimiter: ${listRequest.delimiter}" }
+                log { "  - maxKeys: ${listRequest.maxKeys}" }
+
+                val listResponse = s3Client?.listObjectsV2(listRequest)
+
+                // 打印响应详情
+                log { "ListObjectsV2Response details:" }
+                log { "  - isTruncated: ${listResponse?.isTruncated}" }
+                log { "  - keyCount: ${listResponse?.keyCount}" }
+                log { "  - maxKeys: ${listResponse?.maxKeys}" }
+                log { "  - name (bucket): ${listResponse?.name}" }
+                log { "  - prefix: ${listResponse?.prefix}" }
+                log { "  - delimiter: ${listResponse?.delimiter}" }
+                log { "  - encodingType: ${listResponse?.encodingType}" }
+                log { "  - continuationToken: ${listResponse?.continuationToken}" }
+                log { "  - nextContinuationToken: ${listResponse?.nextContinuationToken}" }
+                log { "  - startAfter: ${listResponse?.startAfter}" }
+                log { "  - contents size: ${listResponse?.contents?.size ?: 0}" }
+                log { "  - commonPrefixes size: ${listResponse?.commonPrefixes?.size ?: 0}" }
+
+                // 打印每个对象的详细信息
+                listResponse?.contents?.forEachIndexed { index, obj ->
+                    log { "  Object $index:" }
+                    log { "    - key: ${obj.key}" }
+                    log { "    - size: ${obj.size}" }
+                    log { "    - lastModified: ${obj.lastModified}" }
+                    log { "    - eTag: ${obj.eTag}" }
+                    log { "    - storageClass: ${obj.storageClass}" }
+                }
+
+                // 打印 commonPrefixes
+                listResponse?.commonPrefixes?.forEachIndexed { index, cp ->
+                    log { "  CommonPrefix $index: ${cp.prefix}" }
+                }
 
                 val objectIdentifiers = listResponse?.contents?.mapNotNull { obj ->
                     obj.key?.let { key ->
-                        log { "Found object to delete: $key" }  // 添加日志
+                        log { "Found object to delete: $key" }
                         ObjectIdentifier { this.key = key }
                     }
                 } ?: emptyList()
 
+                log { "Total objects to delete: ${objectIdentifiers.size}" }
+
                 if (objectIdentifiers.isNotEmpty()) {
-                    log { "Deleting ${objectIdentifiers.size} objects" }  // 添加日志
+                    log { "Deleting ${objectIdentifiers.size} objects" }
                     val deleteRequest = Delete {
                         objects = objectIdentifiers
                     }
 
-                    s3Client?.deleteObjects(DeleteObjectsRequest {
+                    val deleteResponse = s3Client?.deleteObjects(DeleteObjectsRequest {
                         bucket = extra.bucket
                         delete = deleteRequest
                     })
-                    log { "Successfully deleted ${objectIdentifiers.size} objects" }  // 添加日志
+
+                    log { "Delete response: deleted=${deleteResponse?.deleted?.size ?: 0}, errors=${deleteResponse?.errors?.size ?: 0}" }
+                    deleteResponse?.deleted?.forEach { deleted ->
+                        log { "Successfully deleted: ${deleted.key}" }
+                    }
+                    deleteResponse?.errors?.forEach { error ->
+                        log { "Failed to delete: ${error.key}, code=${error.code}, message=${error.message}" }
+                    }
+                } else {
+                    log { "No objects found to delete for prefix: $prefix" }
                 }
                 true
             } catch (e: Exception) {
                 log { "removeDirectory failed: ${e.message}" }
+                log { "Exception type: ${e::class.simpleName}" }
+                log { "Stack trace: ${e.stackTraceToString()}" }
                 false
             }
         }

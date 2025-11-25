@@ -171,11 +171,15 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
         val timestamp = mBackupTimestamp
         log { "Using timestamp: $timestamp for cleanup" }
 
-        // 1. 删除远程文件 - 只清理未完成的包(index >= currentIndex)
+        // 删除未完成的包(基于状态判断)
         mPkgEntities.forEachIndexed { index, pkg ->
-            if (index >= currentIndex && pkg.packageEntity.indexInfo.backupTimestamp == timestamp) {
-                val remoteAppDir = getRemoteAppDir(pkg.packageEntity.archivesRelativeDir)
-                log { "Cleaning up incomplete backup at: $remoteAppDir (index: $index)" }
+            val p = pkg.packageEntity
+            // 只删除时间戳匹配且状态不是 DONE 的包
+            if (index >= currentIndex - 1 && pkg.packageEntity.indexInfo.backupTimestamp == timestamp) {
+                val remoteAppDir = getRemoteAppDir(p.archivesRelativeDir)
+                log { "Cleaning up incomplete backup: ${p.packageName} at $remoteAppDir" }
+
+                // 删除远程文件
                 runCatching {
                     mClient.deleteRecursively(remoteAppDir)
                 }.onSuccess {
@@ -184,25 +188,14 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
                     log { "Failed to cleanup: ${e.message}" }
                 }
 
-                // 2. 标记这个特定的包为已取消
-                val p = pkg.packageEntity
-                log { "Marking package ${p.packageName} (userId: ${p.userId}) as canceled" }
+                // 标记和删除数据库记录
                 runCatching {
                     mPackageDao.markAsCanceledByTimestamp(timestamp, p.packageName, p.userId)
-                }.onSuccess {
-                    log { "Successfully marked package as canceled" }
-                }.onFailure { e ->
-                    log { "Failed to mark package as canceled: ${e.message}" }
-                }
-
-                // 3. 删除这个特定包的数据库记录
-                log { "Deleting canceled package ${p.packageName} from database" }
-                runCatching {
                     mPackageDao.deleteCanceledByTimestamp(timestamp, OpType.RESTORE, p.packageName, p.userId)
                 }.onSuccess {
-                    log { "Successfully deleted canceled package from database" }
+                    log { "Successfully deleted package from database" }
                 }.onFailure { e ->
-                    log { "Failed to delete canceled package: ${e.message}" }
+                    log { "Failed to delete package: ${e.message}" }
                 }
             }
         }
