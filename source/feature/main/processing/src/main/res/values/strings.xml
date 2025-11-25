@@ -5,4 +5,6 @@
     <string name="deleting_incomplete_backups">Deleting incomplete backups to prevent data corruption. Please do not close this page.</string>
     <string name="cancel_backup">Cancel backup</string>
     <string name="cancel_restore">Cancel restore</string>
+    <string name="cleaning_up_incomplete_backups">Cleaning up canceled backups ..</string>
+    <string name="backup_canceled">Backup successfully cancelled</string>
 </resources>

@@ -18,4 +18,7 @@ interface UploadIdDao {
 
     @Query("DELETE FROM UploadIdEntity WHERE id = :id")
     suspend fun deleteById(id: Long)
+
+    @Query("DELETE FROM UploadIdEntity WHERE timestamp = :timestamp")
+    suspend fun deleteByTimestamp(timestamp: Long)  // 新增这个方法
 }

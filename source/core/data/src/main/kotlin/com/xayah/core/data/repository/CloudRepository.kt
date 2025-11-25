@@ -138,6 +138,7 @@ class CloudRepository @Inject constructor(
         return client to entity
     }
 
+    // 1. 原有方法:通过名称从数据库查询
     suspend fun withClient(name: String? = null, block: suspend (client: CloudClient, entity: CloudEntity) -> Unit) = run {
         log { "withClient: Getting client for $name" }
         val (client, entity) = getClient(name)
@@ -148,6 +149,28 @@ class CloudRepository @Inject constructor(
         log { "withClient: Client disconnected" }
     }
 
+    // 2. 新增方法:直接使用 CloudEntity,可选跳过远程检查
+    suspend fun withClient(
+        entity: CloudEntity,
+        skipRemoteCheck: Boolean = false,
+        block: suspend (client: CloudClient, entity: CloudEntity) -> Unit
+    ) = run {
+        log { "withClient: Creating client from entity ${entity.name}" }
+        if (!skipRemoteCheck && entity.remote.isEmpty()) {
+            throw IllegalAccessException("${entity.name}: Remote directory is not set.")
+        }
+        val client = entity.getCloud(uploadIdDao).apply {
+            log { "withClient: Connecting client..." }
+            connect()
+        }
+        log { "withClient: Client connected, executing block" }
+        block(client, entity)
+        log { "withClient: Block completed, disconnecting client" }
+        client.disconnect()
+        log { "withClient: Client disconnected" }
+    }
+
+    // 3. 保留原有方法:处理多个激活的客户端
     suspend fun withActivatedClients(block: suspend (clients: List<Pair<CloudClient, CloudEntity>>) -> Unit) = run {
         val clients: MutableList<Pair<CloudClient, CloudEntity>> = mutableListOf()
         cloudDao.queryActivated().forEach {

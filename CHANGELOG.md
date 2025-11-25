@@ -1,3 +1,34 @@
+## 2025-11-25
+
+## 2025-11-25
+
+### 修复
+
+**修复备份取消时已上传文件未被删除的问题**
+
+#### 问题描述
+
+在备份过程中点击取消按钮后,虽然正在上传的文件(如 `user.tar.zst`)的分块上传被正确中止,但已经完成上传的文件(如 `apk.tar.zst`)未被删除,导致存储桶中残留不完整的备份数据。
+
+#### 根本原因
+
+`BackupServiceCloudImpl.onCleanupIncompleteBackup()` 方法使用了基于索引的判断条件 `index >= currentIndex`,导致索引小于 `currentIndex` 的已完成上传文件不在清理范围内。
+
+例如:当 `currentIndex=1` 时,索引为 0 的 `apk.tar.zst` 已经上传成功,但因为 `0 < 1`,所以不会被清理。
+
+#### 解决方案
+
+##### 1. 修改清理判断逻辑
+
+**包备份服务** (`BackupServiceCloudImpl.kt`):
+- 将判断条件从 `if (index >= currentIndex)` 改为 `if (pkg.packageEntity.indexInfo.backupTimestamp == timestamp)`
+- 使用统一的备份时间戳标识同一备份会话中的所有操作
+- 确保清理所有与当前时间戳匹配的包,无论索引位置
+
+##### 2. 添加日志追踪
+
+在 `AbstractProcessingViewModel.CancelAndCleanup` 中添加追踪日志
+
 ## 2025-11-24
 ### 新增功能
 

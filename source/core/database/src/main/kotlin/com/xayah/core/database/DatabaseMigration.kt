@@ -272,4 +272,18 @@ object DatabaseMigrations {
             )
         }
     }
+
+    val MIGRATION_9_10 = object : Migration(9, 10) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            // 添加 isCanceled 列到 PackageEntity
+            database.execSQL(
+                "ALTER TABLE PackageEntity ADD COLUMN extraInfo_isCanceled INTEGER NOT NULL DEFAULT 0"
+            )
+
+            // 添加 isCanceled 列到 MediaEntity
+            database.execSQL(
+                "ALTER TABLE MediaEntity ADD COLUMN extraInfo_isCanceled INTEGER NOT NULL DEFAULT 0"
+            )
+        }
+    }
 }

@@ -31,6 +31,9 @@ import com.xayah.core.util.command.PreparationUtil
 import kotlinx.coroutines.flow.first
 
 internal abstract class AbstractBackupService : AbstractPackagesService() {
+    // 新增:存储本次备份的时间戳
+    protected var mBackupTimestamp: Long = 0L
+
     override suspend fun onInitializingPreprocessingEntities(entities: MutableList<ProcessingInfoEntity>) {
         entities.apply {
             add(ProcessingInfoEntity(
@@ -76,11 +79,11 @@ internal abstract class AbstractBackupService : AbstractPackagesService() {
     @SuppressLint("StringFormatInvalid")
     override suspend fun onInitializing() {
         // 生成本次备份的统一时间戳
-        val backupTimestamp = DateUtil.getTimestamp()
+        mBackupTimestamp = DateUtil.getTimestamp()  // 使用类变量
         val packages = mPackageRepo.queryActivated(OpType.BACKUP)
 
         packages.forEach { pkg ->
-            pkg.indexInfo.backupTimestamp = backupTimestamp
+            pkg.indexInfo.backupTimestamp = mBackupTimestamp  // 使用类变量
 
             // 关键修改:确保 packageInfo 完整
             // 从系统获取最新的包信息
@@ -139,11 +142,7 @@ internal abstract class AbstractBackupService : AbstractPackagesService() {
     protected open suspend fun onConfigsSaved(path: String, entity: ProcessingInfoEntity) {}
     protected open suspend fun onIconsSaved(path: String, entity: ProcessingInfoEntity) {}
     protected open suspend fun clear() {}
-
-    // 新增抽象方法:清理失败的备份
     protected open suspend fun onCleanupFailedBackup(archivesRelativeDir: String) {}
-
-    // 新增抽象方法:清理未完成的备份
     override suspend fun onCleanupIncompleteBackup(currentIndex: Int) {}
 
     protected abstract val mPackagesBackupUtil: PackagesBackupUtil
@@ -176,11 +175,19 @@ internal abstract class AbstractBackupService : AbstractPackagesService() {
         val killAppOption = mContext.readKillAppOption().first()
         log { "Kill app option: $killAppOption" }
 
-        // 使用 for 循环替代 forEachIndexed,以便能够使用 break
         for (index in mPkgEntities.indices) {
             // 在每次迭代开始时检查取消标志
             if (isCanceled()) {
-                log { "Backup canceled by user" }
+                log { "Backup canceled by user at index: $index" }
+                val timestamp = mBackupTimestamp
+                log { "Marking all packages with timestamp $timestamp as canceled" }
+                runCatching {
+                    mPackageDao.markAsCanceledByTimestamp(timestamp)
+                }.onSuccess {
+                    log { "Successfully marked packages as canceled" }
+                }.onFailure { e ->
+                    log { "Failed to mark packages as canceled: ${e.message}" }
+                }
                 break
             }
 
@@ -211,7 +218,9 @@ internal abstract class AbstractBackupService : AbstractPackagesService() {
                     p.indexInfo.backupTimestamp
                 )
                 mRootService.mkdirs(dstDir)
+
                 if (onAppDirCreated(archivesRelativeDir = p.archivesRelativeDir)) {
+                    // 1. 执行所有数据类型的备份
                     backup(type = DataType.PACKAGE_APK, p = p, r = restoreEntity, t = pkg, dstDir = dstDir)
                     backup(type = DataType.PACKAGE_USER, p = p, r = restoreEntity, t = pkg, dstDir = dstDir)
                     backup(type = DataType.PACKAGE_USER_DE, p = p, r = restoreEntity, t = pkg, dstDir = dstDir)
@@ -219,17 +228,35 @@ internal abstract class AbstractBackupService : AbstractPackagesService() {
                     backup(type = DataType.PACKAGE_OBB, p = p, r = restoreEntity, t = pkg, dstDir = dstDir)
                     backup(type = DataType.PACKAGE_MEDIA, p = p, r = restoreEntity, t = pkg, dstDir = dstDir)
 
-                    // 在所有数据类型备份完成后,检查取消标志
+                    // 2. 在所有数据类型备份完成后,检查取消标志
                     if (isCanceled()) {
-                        log { "Backup canceled, skipping permissions and ssaid" }
+                        log { "Backup canceled after data backup, skipping config save" }
+
+                        // 立即标记数据库
+                        val timestamp = mBackupTimestamp
+                        log { "Marking all packages with timestamp $timestamp as canceled" }
+                        runCatching {
+                            mPackageDao.markAsCanceledByTimestamp(timestamp)
+                        }.onSuccess {
+                            log { "Successfully marked packages as canceled" }
+                        }.onFailure { e ->
+                            log { "Failed to mark packages as canceled: ${e.message}" }
+                        }
+
                         pkg.update(state = OperationState.ERROR)
                         mTaskEntity.update(failureCount = mTaskEntity.failureCount + 1)
                     } else {
-                        // 只有在未取消的情况下才执行 permissions 和 ssaid 备份
+                        // 3. 只有在未取消的情况下才执行 permissions 和 ssaid 备份
                         mPackagesBackupUtil.backupPermissions(p = p)
                         mPackagesBackupUtil.backupSsaid(p = p)
 
-                        if (pkg.isSuccess) {
+                        // 4. 在保存配置前再次检查取消标志
+                        if (isCanceled()) {
+                            log { "Backup canceled before saving config" }
+                            pkg.update(state = OperationState.ERROR)
+                            mTaskEntity.update(failureCount = mTaskEntity.failureCount + 1)
+                        } else if (pkg.isSuccess) {
+                            // 5. 只有在未取消且备份成功的情况下才保存配置
                             p.extraInfo.lastBackupTime = DateUtil.getTimestamp()
                             val id = restoreEntity?.id ?: 0
                             restoreEntity = p.copy(

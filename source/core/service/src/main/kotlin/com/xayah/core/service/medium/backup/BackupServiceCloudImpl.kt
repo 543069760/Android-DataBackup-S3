@@ -15,6 +15,8 @@ import com.xayah.core.model.database.ProcessingInfoEntity
 import com.xayah.core.model.database.TaskDetailMediaEntity
 import com.xayah.core.model.database.TaskEntity
 import com.xayah.core.network.client.CloudClient
+import com.xayah.core.database.dao.UploadIdDao
+import com.xayah.core.network.client.S3ClientImpl
 import com.xayah.core.rootservice.service.RemoteRootService
 import com.xayah.core.service.util.CommonBackupUtil
 import com.xayah.core.service.util.MediumBackupUtil
@@ -129,10 +131,33 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
     }
 
     override suspend fun onCleanupFailedBackup(archivesRelativeDir: String) {
-        val remoteFileDir = getRemoteFileDir(archivesRelativeDir)
+        val remoteFileDir = getRemoteFileDir(archivesRelativeDir)  // 使用 getRemoteFileDir 而不是 getRemoteAppDir
         log { "Cleaning up failed backup at: $remoteFileDir" }
+
         runCatching {
+            // 1. 删除已完成上传的对象(使用现有的 deleteRecursively)
             mClient.deleteRecursively(remoteFileDir)
+
+            // 2. 清理未完成的分块上传
+            val allUploadIds = mUploadIdDao.getAll()
+            allUploadIds.forEach { uploadIdEntity ->
+                if (uploadIdEntity.key.startsWith(remoteFileDir)) {
+                    runCatching {
+                        // 需要直接访问 S3ClientImpl 的方法
+                        if (mClient is S3ClientImpl) {
+                            // 调用 S3 API 中止分块上传
+                            (mClient as S3ClientImpl).abortMultipartUpload(
+                                uploadIdEntity.bucket,
+                                uploadIdEntity.key,
+                                uploadIdEntity.uploadId
+                            )
+                        }
+                        mUploadIdDao.deleteById(uploadIdEntity.id)
+                    }.onFailure { e ->
+                        log { "Failed to abort upload ${uploadIdEntity.uploadId}: ${e.message}" }
+                    }
+                }
+            }
         }.onSuccess {
             log { "Successfully cleaned up: $remoteFileDir" }
         }.onFailure { e ->
@@ -143,10 +168,15 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
     override suspend fun onCleanupIncompleteBackup(currentIndex: Int) {
         log { "Cleaning up incomplete cloud file backup from index: $currentIndex" }
 
+        // 直接使用类变量而不是从实体获取
+        val timestamp = mBackupTimestamp
+
+        // 1. 删除远程文件(使用 deleteRecursively 而不是 listObjects)
         mMediaEntities.forEachIndexed { index, media ->
             if (index >= currentIndex) {
                 val remoteFileDir = getRemoteFileDir(media.mediaEntity.archivesRelativeDir)
-                log { "Cleaning up incomplete backup at: $remoteFileDir" }
+                log { "Cleaning up incomplete backup at: $remoteFileDir (index: $index)" }
+
                 runCatching {
                     mClient.deleteRecursively(remoteFileDir)
                 }.onSuccess {
@@ -155,6 +185,60 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
                     log { "Failed to cleanup: ${e.message}" }
                 }
             }
+        }
+
+        // 2. 标记数据库中的取消记录
+        log { "Marking all media with timestamp $timestamp as canceled" }
+        runCatching {
+            mMediaDao.markAsCanceledByTimestamp(timestamp)
+        }.onSuccess {
+            log { "Successfully marked media as canceled" }
+        }.onFailure { e ->
+            log { "Failed to mark media as canceled: ${e.message}" }
+        }
+
+        // 3. 删除数据库中的取消标记
+        log { "Deleting canceled media from database" }
+        runCatching {
+            mMediaDao.deleteCanceledByTimestamp(timestamp)
+        }.onSuccess {
+            log { "Successfully deleted canceled media from database" }
+        }.onFailure { e ->
+            log { "Failed to delete canceled media: ${e.message}" }
+        }
+
+        // 4. 清理相关的 uploadId
+        log { "Cleaning up uploadId records for timestamp: $timestamp" }
+        runCatching {
+            val allUploadIds = mUploadIdDao.getAll()
+            allUploadIds.forEach { uploadIdEntity ->
+                // 检查 uploadId 是否属于本次备份
+                val belongsToThisBackup = mMediaEntities.any { media ->
+                    val remoteFileDir = getRemoteFileDir(media.mediaEntity.archivesRelativeDir)
+                    uploadIdEntity.key.startsWith(remoteFileDir)
+                }
+
+                if (belongsToThisBackup) {
+                    log { "Aborting multipart upload: ${uploadIdEntity.uploadId} for key: ${uploadIdEntity.key}" }
+                    runCatching {
+                        // 类型检查后调用 S3 特定方法
+                        if (mClient is S3ClientImpl) {
+                            (mClient as S3ClientImpl).abortMultipartUpload(
+                                bucket = uploadIdEntity.bucket,
+                                key = uploadIdEntity.key,
+                                uploadId = uploadIdEntity.uploadId
+                            )
+                        }
+                        mUploadIdDao.deleteById(uploadIdEntity.id)
+                    }.onFailure { e ->
+                        log { "Failed to abort upload ${uploadIdEntity.uploadId}: ${e.message}" }
+                    }
+                }
+            }
+        }.onSuccess {
+            log { "Successfully cleaned up uploadId records" }
+        }.onFailure { e ->
+            log { "Failed to cleanup uploadId records: ${e.message}" }
         }
     }
 
@@ -276,6 +360,9 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
 
         @Inject
         lateinit var mCloudRepo: CloudRepository
+
+        @Inject
+        lateinit var mUploadIdDao: UploadIdDao
 
         private lateinit var mCloudEntity: CloudEntity
         private lateinit var mClient: CloudClient

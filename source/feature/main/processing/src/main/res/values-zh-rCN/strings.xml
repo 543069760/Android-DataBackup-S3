@@ -5,4 +5,6 @@
     <string name="cancel_backup_confirmation">确定要取消吗？只会删除正在处理的项目,批量备份中已完成的备份将保留。</string>
     <string name="deleting_incomplete_backups">正在删除未完成不完整的备份,避免备份数据异常，请不要关闭当前页面</string>
     <string name="cancel_restore">取消恢复</string>
+    <string name="cleaning_up_incomplete_backups">正在清理已取消的备份...</string>
+    <string name="backup_canceled">备份已取消</string>
 </resources>

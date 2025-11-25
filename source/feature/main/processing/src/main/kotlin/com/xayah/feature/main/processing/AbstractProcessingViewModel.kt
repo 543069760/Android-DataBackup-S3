@@ -21,6 +21,7 @@ import com.xayah.core.ui.viewmodel.UiIntent
 import com.xayah.core.ui.viewmodel.UiState
 import com.xayah.core.ui.material3.SnackbarType
 import com.xayah.core.ui.material3.SnackbarDuration
+import com.xayah.core.util.LogUtil
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -61,6 +62,17 @@ abstract class AbstractProcessingViewModel(
         cloudEntity = null
     )
 ) {
+
+    companion object {
+        private const val TAG = "AbstractProcessingViewModel"
+    }
+
+    private fun log(onMsg: () -> String): String = run {
+        val msg = onMsg()
+        LogUtil.log { TAG to msg }
+        msg
+    }
+
     open suspend fun onOtherEvent(state: IndexUiState, intent: ProcessingUiIntent) {}
 
     init {
@@ -126,12 +138,16 @@ abstract class AbstractProcessingViewModel(
                     )
                 )
 
-                // 4. 清理未完成的备份
+                // 4. 清理未完成的备份 - 添加日志
                 if (state.storageType == StorageMode.Cloud) {
+                    log { "Calling cleanupIncompleteBackup with index: $currentIndex" }  // 添加日志
                     mCloudService.cleanupIncompleteBackup(currentIndex)
+                    log { "cleanupIncompleteBackup completed" }  // 添加日志
                     mCloudService.destroyService(true)
                 } else {
+                    log { "Calling cleanupIncompleteBackup with index: $currentIndex" }  // 添加日志
                     mLocalService.cleanupIncompleteBackup(currentIndex)
+                    log { "cleanupIncompleteBackup completed" }  // 添加日志
                     mLocalService.destroyService(true)
                 }
 
@@ -152,12 +168,11 @@ abstract class AbstractProcessingViewModel(
                 // 9. 发送导航返回Effect
                 emitEffect(IndexUiEffect.NavBack)
             }
+
             is ProcessingUiIntent.DestroyService -> {
                 if (state.storageType == StorageMode.Cloud) {
-                    // Cloud
                     mCloudService.destroyService(true)
                 } else {
-                    // Local
                     mLocalService.destroyService(true)
                 }
             }
@@ -172,7 +187,7 @@ abstract class AbstractProcessingViewModel(
             else -> {
                 onOtherEvent(state, intent)
             }
-        }
+        }  // 结束 when 表达式
     }
 
     protected abstract val _dataItems: Flow<List<ProcessingDataCardItem>>

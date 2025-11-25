@@ -26,7 +26,7 @@ import com.xayah.core.model.database.TaskEntity
 import com.xayah.core.model.database.UploadIdEntity  // 新增
 
 @Database(
-    version = 9,  // 升级版本
+    version = 10,  // 升级版本
     exportSchema = true,
     entities = [
         PackageEntity::class,

@@ -34,6 +34,7 @@ data class MediaExtraInfo(
     var activated: Boolean,
     var existed: Boolean,
     @ColumnInfo(defaultValue = "0") var isProtected: Boolean = false,  // 新增字段
+    @ColumnInfo(defaultValue = "0") var isCanceled: Boolean = false,
 )
 
 @Serializable

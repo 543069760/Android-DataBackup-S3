@@ -225,7 +225,8 @@ class IndexViewModel @Inject constructor(
                     )
                 )
                 runCatching {
-                    cloudRepo.withClient(state.cloudEntity!!.name) { client, _ ->
+                    // 明确指定 skipRemoteCheck = true,测试连接不需要远程路径
+                    cloudRepo.withClient(state.cloudEntity!!, skipRemoteCheck = true) { client, _ ->
                         client.testConnection()
                     }
                     emitEffect(IndexUiEffect.DismissSnackbar)
@@ -257,9 +258,10 @@ class IndexViewModel @Inject constructor(
                     )
                 )
                 runCatching {
-                    cloudRepo.withClient(uiState.value.cloudEntity!!.name) { client, _ ->
+                    // 使用新的重载方法,直接传入 CloudEntity,跳过远程路径检查
+                    cloudRepo.withClient(uiState.value.cloudEntity!!, skipRemoteCheck = true) { client, entity ->
                         client.setRemote(context) { remote, extraString ->
-                            emitState(uiState.value.copy(cloudEntity = uiState.value.cloudEntity!!.copy(remote = remote, extra = extraString)))
+                            emitState(uiState.value.copy(cloudEntity = entity.copy(remote = remote, extra = extraString)))
                             emitEffect(IndexUiEffect.DismissSnackbar)
                         }
                     }

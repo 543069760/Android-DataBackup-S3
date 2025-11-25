@@ -26,6 +26,9 @@ import com.xayah.core.util.PathUtil
 import kotlinx.coroutines.flow.first
 
 internal abstract class AbstractBackupService : AbstractMediumService() {
+    // 新增:存储本次备份的时间戳
+    protected var mBackupTimestamp: Long = 0L
+
     override suspend fun onInitializingPreprocessingEntities(entities: MutableList<ProcessingInfoEntity>) {
         entities.apply {
             add(ProcessingInfoEntity(
@@ -63,11 +66,11 @@ internal abstract class AbstractBackupService : AbstractMediumService() {
     @SuppressLint("StringFormatInvalid")
     override suspend fun onInitializing() {
         // 生成本次备份的统一时间戳
-        val backupTimestamp = DateUtil.getTimestamp()
+        mBackupTimestamp = DateUtil.getTimestamp()
         val medium = mMediaRepo.queryActivated(OpType.BACKUP)
 
         medium.forEach { media ->
-            media.indexInfo.backupTimestamp = backupTimestamp
+            media.indexInfo.backupTimestamp = mBackupTimestamp
             mMediaEntities.add(
                 TaskDetailMediaEntity(
                     taskId = mTaskEntity.id,
@@ -108,15 +111,14 @@ internal abstract class AbstractBackupService : AbstractMediumService() {
     }
 
     override suspend fun onProcessing() {
-        // createTargetDirs() before readStatFs().
         mTaskEntity.update(rawBytes = mTaskRepo.getRawBytes(TaskType.MEDIA), availableBytes = mTaskRepo.getAvailableBytes(OpType.BACKUP), totalBytes = mTaskRepo.getTotalBytes(OpType.BACKUP), totalCount = mMediaEntities.size)
         log { "Task count: ${mMediaEntities.size}." }
 
         for (index in mMediaEntities.indices) {
-            // 立即检查取消标志
+            // 1. 循环开始时检查取消标志
             if (isCanceled()) {
                 log { "Backup canceled by user at media index: $index" }
-                break
+                break  // 直接退出循环
             }
 
             val media = mMediaEntities[index]
@@ -136,11 +138,14 @@ internal abstract class AbstractBackupService : AbstractMediumService() {
                 val dstDir = "${mFilesDir}/${m.archivesRelativeDir}"
                 var restoreEntity = mMediaDao.query(OpType.RESTORE, m.preserveId, m.name, m.indexInfo.compressionType, mTaskEntity.cloud, mTaskEntity.backupDir)
                 mRootService.mkdirs(dstDir)
+
                 if (onFileDirCreated(archivesRelativeDir = m.archivesRelativeDir)) {
+                    // 执行备份
                     backup(m = m, r = restoreEntity, t = media, dstDir = dstDir)
 
+                    // 只有在未取消且备份成功时才保存配置
                     if (media.isSuccess) {
-                        // Save config
+                        // 保存配置文件和创建恢复记录
                         m.extraInfo.lastBackupTime = DateUtil.getTimestamp()
                         val id = restoreEntity?.id ?: 0
                         restoreEntity = m.copy(
@@ -165,11 +170,19 @@ internal abstract class AbstractBackupService : AbstractMediumService() {
                         }
                         mTaskEntity.update(failureCount = mTaskEntity.failureCount + 1)
                     }
+
+                    media.update(state = if (media.isSuccess) OperationState.DONE else OperationState.ERROR)
                 } else {
                     media.update(state = OperationState.ERROR)
                 }
-                media.update(state = if (media.isSuccess) OperationState.DONE else OperationState.ERROR)
             }
+
+            // 2. 备份完成后检查取消标志(在保存配置前)
+            if (isCanceled()) {
+                log { "Backup canceled after media backup, skipping remaining items" }
+                break  // 退出循环
+            }
+
             mTaskEntity.update(processingIndex = mTaskEntity.processingIndex + 1)
         }
     }

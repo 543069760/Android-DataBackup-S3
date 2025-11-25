@@ -20,6 +20,8 @@ import com.xayah.core.network.client.CloudClient
 import com.xayah.core.rootservice.service.RemoteRootService
 import com.xayah.core.service.util.CommonBackupUtil
 import com.xayah.core.service.util.PackagesBackupUtil
+import com.xayah.core.database.dao.UploadIdDao
+import com.xayah.core.network.client.S3ClientImpl
 import com.xayah.core.util.PathUtil
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -127,12 +129,35 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
         )
     }
 
-    // 实现清理失败备份的逻辑
     override suspend fun onCleanupFailedBackup(archivesRelativeDir: String) {
         val remoteAppDir = getRemoteAppDir(archivesRelativeDir)
         log { "Cleaning up failed backup at: $remoteAppDir" }
+
         runCatching {
+            // 使用 deleteRecursively 删除目录下所有对象
             mClient.deleteRecursively(remoteAppDir)
+
+            // 清理未完成的分块上传
+            log { "Cleaning up incomplete multipart uploads for: $remoteAppDir" }
+            val uploadIds = mUploadIdDao.getAll()
+            uploadIds.forEach { uploadIdEntity ->
+                if (uploadIdEntity.key.startsWith(remoteAppDir)) {
+                    log { "Aborting multipart upload: ${uploadIdEntity.uploadId}" }
+                    runCatching {
+                        // 需要类型转换为 S3ClientImpl 才能调用 abortMultipartUpload
+                        if (mClient is com.xayah.core.network.client.S3ClientImpl) {
+                            (mClient as com.xayah.core.network.client.S3ClientImpl).abortMultipartUpload(
+                                uploadIdEntity.bucket,
+                                uploadIdEntity.key,
+                                uploadIdEntity.uploadId
+                            )
+                        }
+                        mUploadIdDao.deleteById(uploadIdEntity.id)
+                    }.onFailure { e ->
+                        log { "Failed to abort upload: ${e.message}" }
+                    }
+                }
+            }
         }.onSuccess {
             log { "Successfully cleaned up: $remoteAppDir" }
         }.onFailure { e ->
@@ -140,15 +165,19 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
         }
     }
 
-    // 实现清理未完成备份的逻辑(用于取消操作)
     override suspend fun onCleanupIncompleteBackup(currentIndex: Int) {
         log { "Cleaning up incomplete backups from index: $currentIndex" }
 
-        // 遍历所有包实体,只清理索引 >= currentIndex 的项目
-        mPkgEntities.forEachIndexed { index, pkg ->
-            if (index >= currentIndex) {
+        // 直接使用类变量而不是从实体获取
+        val timestamp = mBackupTimestamp
+        log { "Using timestamp: $timestamp for cleanup" }
+
+        // 1. 删除远程文件 - 遍历所有包,清理与当前时间戳匹配的包
+        mPkgEntities.forEach { pkg ->
+            // 检查包的时间戳是否与当前备份会话匹配
+            if (pkg.packageEntity.indexInfo.backupTimestamp == timestamp) {
                 val remoteAppDir = getRemoteAppDir(pkg.packageEntity.archivesRelativeDir)
-                log { "Cleaning up incomplete backup at: $remoteAppDir (index: $index)" }
+                log { "Cleaning up incomplete backup at: $remoteAppDir" }
                 runCatching {
                     mClient.deleteRecursively(remoteAppDir)
                 }.onSuccess {
@@ -157,6 +186,36 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
                     log { "Failed to cleanup: ${e.message}" }
                 }
             }
+        }
+
+        // 2. 标记数据库中的取消记录
+        log { "Marking packages as canceled for timestamp: $timestamp" }
+        runCatching {
+            mPackageDao.markAsCanceledByTimestamp(timestamp)
+        }.onSuccess {
+            log { "Successfully marked packages as canceled" }
+        }.onFailure { e ->
+            log { "Failed to mark packages as canceled: ${e.message}" }
+        }
+
+        // 3. 删除数据库中的取消标记
+        log { "Deleting canceled packages from database" }
+        runCatching {
+            mPackageDao.deleteCanceledByTimestamp(timestamp)
+        }.onSuccess {
+            log { "Successfully deleted canceled packages from database" }
+        }.onFailure { e ->
+            log { "Failed to delete canceled packages: ${e.message}" }
+        }
+
+        // 4. 清理相关的 uploadId
+        log { "Cleaning up uploadId records for timestamp: $timestamp" }
+        runCatching {
+            mUploadIdDao.deleteByTimestamp(timestamp)
+        }.onSuccess {
+            log { "Successfully cleaned up uploadId records" }
+        }.onFailure { e ->
+            log { "Failed to cleanup uploadId records: ${e.message}" }
         }
     }
 
@@ -327,6 +386,9 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
 
     @Inject
     lateinit var mCloudRepo: CloudRepository
+
+    @Inject
+    lateinit var mUploadIdDao: UploadIdDao  // 新增这两行
 
     private lateinit var mCloudEntity: CloudEntity
     private lateinit var mClient: CloudClient

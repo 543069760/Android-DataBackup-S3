@@ -89,6 +89,7 @@ data class PackageExtraInfo(
     @ColumnInfo(defaultValue = "1") var firstUpdated: Boolean,
     @ColumnInfo(defaultValue = "1") var enabled: Boolean,
     @ColumnInfo(defaultValue = "0") var isProtected: Boolean = false,  // 新增字段
+    @ColumnInfo(defaultValue = "0") var isCanceled: Boolean = false,
 )
 
 @Serializable

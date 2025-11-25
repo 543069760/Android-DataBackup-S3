@@ -433,6 +433,8 @@ class S3ClientImpl(
         return runBlocking {
             try {
                 val prefix = normalizeObjectKey(src) + "/"
+                log { "Listing objects with prefix: $prefix" }  // 添加日志
+
                 val listResponse = s3Client?.listObjectsV2(ListObjectsV2Request {
                     bucket = extra.bucket
                     this.prefix = prefix
@@ -440,11 +442,13 @@ class S3ClientImpl(
 
                 val objectIdentifiers = listResponse?.contents?.mapNotNull { obj ->
                     obj.key?.let { key ->
+                        log { "Found object to delete: $key" }  // 添加日志
                         ObjectIdentifier { this.key = key }
                     }
                 } ?: emptyList()
 
                 if (objectIdentifiers.isNotEmpty()) {
+                    log { "Deleting ${objectIdentifiers.size} objects" }  // 添加日志
                     val deleteRequest = Delete {
                         objects = objectIdentifiers
                     }
@@ -453,6 +457,7 @@ class S3ClientImpl(
                         bucket = extra.bucket
                         delete = deleteRequest
                     })
+                    log { "Successfully deleted ${objectIdentifiers.size} objects" }  // 添加日志
                 }
                 true
             } catch (e: Exception) {
@@ -465,6 +470,16 @@ class S3ClientImpl(
     override fun deleteRecursively(src: String): Boolean {
         log { "deleteRecursively: $src" }
         return removeDirectory(src)
+    }
+
+    suspend fun abortMultipartUpload(bucket: String, key: String, uploadId: String) {
+        s3Client?.abortMultipartUpload(
+            AbortMultipartUploadRequest {
+                this.bucket = bucket
+                this.key = key
+                this.uploadId = uploadId
+            }
+        )
     }
 
     override fun clearEmptyDirectoriesRecursively(src: String) {
