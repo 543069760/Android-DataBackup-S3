@@ -87,7 +87,7 @@ jobs:
         echo "code=$CODE" >> $GITHUB_OUTPUT
       working-directory: source
 
-    - name: Build with gradle (Release variants with version override)
+    - name: Build with gradle (Debug variants with version override)
       id: gradle
       env:
         BUILD_ALPHA: ${{ github.event.inputs.Alpha }}
@@ -96,44 +96,41 @@ jobs:
         VERSION_NAME: ${{ steps.version.outputs.version }}
         VERSION_CODE: ${{ steps.version.outputs.code }}
       run: |
-        echo "Building release variants (without signing)"
+        echo "Building debug variants (without signing)"
         echo "Version Name: $VERSION_NAME"
         echo "Version Code: $VERSION_CODE"
         
         TASKS=""
         if [ "${BUILD_ALPHA}" = 'true' ]; then
-          TASKS="$TASKS assembleArm64-v8aAlphaRelease assembleArmeabi-v7aAlphaRelease assembleX86AlphaRelease assembleX86_64AlphaRelease"
+          TASKS="$TASKS assembleArm64-v8aAlphaDebug assembleArmeabi-v7aAlphaDebug assembleX86AlphaDebug assembleX86_64AlphaDebug"
         fi
         if [ "${BUILD_PREMIUM}" = 'true' ]; then
-          TASKS="$TASKS assembleArm64-v8aPremiumRelease assembleArmeabi-v7aPremiumRelease assembleX86PremiumRelease assembleX86_64PremiumRelease"
+          TASKS="$TASKS assembleArm64-v8aPremiumDebug assembleArmeabi-v7aPremiumDebug assembleX86PremiumDebug assembleX86_64PremiumDebug"
         fi
         if [ "${BUILD_FOSS}" = 'true' ]; then
-          TASKS="$TASKS assembleArm64-v8aFossRelease assembleArmeabi-v7aFossRelease assembleX86FossRelease assembleX86_64FossRelease"
+          TASKS="$TASKS assembleArm64-v8aFossDebug assembleArmeabi-v7aFossDebug assembleX86FossDebug assembleX86_64FossDebug"
         fi
         if [ -z "${TASKS}" ]; then
-          TASKS="assembleRelease"
+          TASKS="assembleDebug"
         fi
         
         echo "Running tasks: $TASKS"
-        # 关键修改：传递版本参数给Gradle
         ./gradlew $TASKS -PversionName="$VERSION_NAME" -PversionCode="$VERSION_CODE" --daemon --parallel
       working-directory: source
 
     - name: Move and rename APKs
       run: |
-        # 创建输出目录
         mkdir -p ../build-output
         
-        # 查找所有release APK文件并复制到build-output
-        find . -name "*-release.apk" -exec cp {} ../build-output/ \;
+        # 查找所有debug APK文件
+        find . -name "*-debug.apk" -exec cp {} ../build-output/ \;
         
-        # 进入build-output目录进行重命名
         cd ../build-output
         
-        # 重命名文件，移除"-release"后缀
-        for file in *-release.apk; do
+        # 重命名文件，移除"-debug"后缀
+        for file in *-debug.apk; do
           if [ -f "$file" ]; then
-            new_name=$(echo "$file" | sed 's/-release//g')
+            new_name=$(echo "$file" | sed 's/-debug//g')
             mv "$file" "$new_name"
             echo "Renamed: $file -> $new_name"
           fi
@@ -172,7 +169,7 @@ jobs:
           - Branch: s3 (S3-specific features)
           
           ### Note
-          ⚠️ This is an UNSIGNED RELEASE build for testing purposes only.
+          ⚠️ This is a DEBUG build without signing, for testing purposes only.
           
           ### Download
           Choose the APK file matching your device architecture:
