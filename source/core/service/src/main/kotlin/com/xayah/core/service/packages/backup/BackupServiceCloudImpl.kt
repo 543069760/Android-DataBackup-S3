@@ -6,6 +6,7 @@ import com.xayah.core.data.repository.PackageRepository
 import com.xayah.core.data.repository.TaskRepository
 import com.xayah.core.database.dao.PackageDao
 import com.xayah.core.database.dao.TaskDao
+import com.xayah.core.database.dao.UploadIdDao
 import com.xayah.core.model.DataType
 import com.xayah.core.model.OpType
 import com.xayah.core.model.OperationState
@@ -17,11 +18,10 @@ import com.xayah.core.model.database.TaskDetailPackageEntity
 import com.xayah.core.model.database.TaskEntity
 import com.xayah.core.model.util.get
 import com.xayah.core.network.client.CloudClient
+import com.xayah.core.network.client.S3ClientImpl
 import com.xayah.core.rootservice.service.RemoteRootService
 import com.xayah.core.service.util.CommonBackupUtil
 import com.xayah.core.service.util.PackagesBackupUtil
-import com.xayah.core.database.dao.UploadIdDao
-import com.xayah.core.network.client.S3ClientImpl
 import com.xayah.core.util.PathUtil
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -124,8 +124,8 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
             client = mClient,
             src = path,
             dstDir = getRemoteAppDir(archivesRelativeDir),
-            onUploading = { _, _ -> },  // 添加空实现
-            isCanceled = { isCanceled() }  // 新增:传入取消检查
+            onUploading = { _, _ -> },
+            isCanceled = { isCanceled() }
         )
     }
 
@@ -145,8 +145,8 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
                     log { "Aborting multipart upload: ${uploadIdEntity.uploadId}" }
                     runCatching {
                         // 需要类型转换为 S3ClientImpl 才能调用 abortMultipartUpload
-                        if (mClient is com.xayah.core.network.client.S3ClientImpl) {
-                            (mClient as com.xayah.core.network.client.S3ClientImpl).abortMultipartUpload(
+                        if (mClient is S3ClientImpl) {
+                            (mClient as S3ClientImpl).abortMultipartUpload(
                                 uploadIdEntity.bucket,
                                 uploadIdEntity.key,
                                 uploadIdEntity.uploadId
@@ -168,16 +168,14 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
     override suspend fun onCleanupIncompleteBackup(currentIndex: Int) {
         log { "Cleaning up incomplete backups from index: $currentIndex" }
 
-        // 直接使用类变量而不是从实体获取
         val timestamp = mBackupTimestamp
         log { "Using timestamp: $timestamp for cleanup" }
 
-        // 1. 删除远程文件 - 遍历所有包,清理与当前时间戳匹配的包
-        mPkgEntities.forEach { pkg ->
-            // 检查包的时间戳是否与当前备份会话匹配
-            if (pkg.packageEntity.indexInfo.backupTimestamp == timestamp) {
+        // 1. 删除远程文件 - 只清理未完成的包(index >= currentIndex)
+        mPkgEntities.forEachIndexed { index, pkg ->
+            if (index >= currentIndex && pkg.packageEntity.indexInfo.backupTimestamp == timestamp) {
                 val remoteAppDir = getRemoteAppDir(pkg.packageEntity.archivesRelativeDir)
-                log { "Cleaning up incomplete backup at: $remoteAppDir" }
+                log { "Cleaning up incomplete backup at: $remoteAppDir (index: $index)" }
                 runCatching {
                     mClient.deleteRecursively(remoteAppDir)
                 }.onSuccess {
@@ -185,27 +183,28 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
                 }.onFailure { e ->
                     log { "Failed to cleanup: ${e.message}" }
                 }
+
+                // 2. 标记这个特定的包为已取消
+                val p = pkg.packageEntity
+                log { "Marking package ${p.packageName} (userId: ${p.userId}) as canceled" }
+                runCatching {
+                    mPackageDao.markAsCanceledByTimestamp(timestamp, p.packageName, p.userId)
+                }.onSuccess {
+                    log { "Successfully marked package as canceled" }
+                }.onFailure { e ->
+                    log { "Failed to mark package as canceled: ${e.message}" }
+                }
+
+                // 3. 删除这个特定包的数据库记录
+                log { "Deleting canceled package ${p.packageName} from database" }
+                runCatching {
+                    mPackageDao.deleteCanceledByTimestamp(timestamp, OpType.RESTORE, p.packageName, p.userId)
+                }.onSuccess {
+                    log { "Successfully deleted canceled package from database" }
+                }.onFailure { e ->
+                    log { "Failed to delete canceled package: ${e.message}" }
+                }
             }
-        }
-
-        // 2. 标记数据库中的取消记录
-        log { "Marking packages as canceled for timestamp: $timestamp" }
-        runCatching {
-            mPackageDao.markAsCanceledByTimestamp(timestamp)
-        }.onSuccess {
-            log { "Successfully marked packages as canceled" }
-        }.onFailure { e ->
-            log { "Failed to mark packages as canceled: ${e.message}" }
-        }
-
-        // 3. 删除数据库中的取消标记
-        log { "Deleting canceled packages from database" }
-        runCatching {
-            mPackageDao.deleteCanceledByTimestamp(timestamp)
-        }.onSuccess {
-            log { "Successfully deleted canceled packages from database" }
-        }.onFailure { e ->
-            log { "Failed to delete canceled packages: ${e.message}" }
         }
 
         // 4. 清理相关的 uploadId
@@ -388,7 +387,7 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
     lateinit var mCloudRepo: CloudRepository
 
     @Inject
-    lateinit var mUploadIdDao: UploadIdDao  // 新增这两行
+    lateinit var mUploadIdDao: UploadIdDao
 
     private lateinit var mCloudEntity: CloudEntity
     private lateinit var mClient: CloudClient

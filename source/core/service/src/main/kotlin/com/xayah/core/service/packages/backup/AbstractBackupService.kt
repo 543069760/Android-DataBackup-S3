@@ -179,15 +179,7 @@ internal abstract class AbstractBackupService : AbstractPackagesService() {
             // 在每次迭代开始时检查取消标志
             if (isCanceled()) {
                 log { "Backup canceled by user at index: $index" }
-                val timestamp = mBackupTimestamp
-                log { "Marking all packages with timestamp $timestamp as canceled" }
-                runCatching {
-                    mPackageDao.markAsCanceledByTimestamp(timestamp)
-                }.onSuccess {
-                    log { "Successfully marked packages as canceled" }
-                }.onFailure { e ->
-                    log { "Failed to mark packages as canceled: ${e.message}" }
-                }
+                // 移除全局标记,让 onCleanupIncompleteBackup 处理
                 break
             }
 
@@ -231,18 +223,7 @@ internal abstract class AbstractBackupService : AbstractPackagesService() {
                     // 2. 在所有数据类型备份完成后,检查取消标志
                     if (isCanceled()) {
                         log { "Backup canceled after data backup, skipping config save" }
-
-                        // 立即标记数据库
-                        val timestamp = mBackupTimestamp
-                        log { "Marking all packages with timestamp $timestamp as canceled" }
-                        runCatching {
-                            mPackageDao.markAsCanceledByTimestamp(timestamp)
-                        }.onSuccess {
-                            log { "Successfully marked packages as canceled" }
-                        }.onFailure { e ->
-                            log { "Failed to mark packages as canceled: ${e.message}" }
-                        }
-
+                        // 移除全局标记,让 onCleanupIncompleteBackup 处理
                         pkg.update(state = OperationState.ERROR)
                         mTaskEntity.update(failureCount = mTaskEntity.failureCount + 1)
                     } else {

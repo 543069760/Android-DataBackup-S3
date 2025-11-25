@@ -20,11 +20,11 @@ interface PackageDao {
     @Upsert(entity = PackageEntity::class)
     suspend fun upsert(item: PackageEntity)
 
-    @Query("UPDATE PackageEntity SET extraInfo_isCanceled = 1 WHERE indexInfo_backupTimestamp = :timestamp")
-    suspend fun markAsCanceledByTimestamp(timestamp: Long)
+    @Query("UPDATE PackageEntity SET extraInfo_isCanceled = 1 WHERE indexInfo_backupTimestamp = :timestamp AND indexInfo_packageName = :packageName AND indexInfo_userId = :userId")
+    suspend fun markAsCanceledByTimestamp(timestamp: Long, packageName: String, userId: Int)
 
-    @Query("DELETE FROM PackageEntity WHERE indexInfo_backupTimestamp = :timestamp AND extraInfo_isCanceled = 1")
-    suspend fun deleteCanceledByTimestamp(timestamp: Long)
+    @Query("DELETE FROM PackageEntity WHERE indexInfo_backupTimestamp = :timestamp AND extraInfo_isCanceled = 1 AND indexInfo_opType = :opType AND indexInfo_packageName = :packageName AND indexInfo_userId = :userId")
+    suspend fun deleteCanceledByTimestamp(timestamp: Long, opType: OpType, packageName: String, userId: Int)
 
     @Query(
         "SELECT * FROM PackageEntity WHERE" +

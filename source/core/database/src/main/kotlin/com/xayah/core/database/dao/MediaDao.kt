@@ -18,11 +18,11 @@ interface MediaDao {
     @Upsert(entity = MediaEntity::class)
     suspend fun upsert(item: MediaEntity)
 
-    @Query("UPDATE MediaEntity SET extraInfo_isCanceled = 1 WHERE indexInfo_backupTimestamp = :timestamp")
-    suspend fun markAsCanceledByTimestamp(timestamp: Long)
+    @Query("UPDATE MediaEntity SET extraInfo_isCanceled = 1 WHERE indexInfo_backupTimestamp = :timestamp AND indexInfo_name = :name")
+    suspend fun markAsCanceledByTimestamp(timestamp: Long, name: String)
 
-    @Query("DELETE FROM MediaEntity WHERE indexInfo_backupTimestamp = :timestamp AND extraInfo_isCanceled = 1")
-    suspend fun deleteCanceledByTimestamp(timestamp: Long)
+    @Query("DELETE FROM MediaEntity WHERE indexInfo_backupTimestamp = :timestamp AND extraInfo_isCanceled = 1 AND indexInfo_opType = :opType AND indexInfo_name = :name")
+    suspend fun deleteCanceledByTimestamp(timestamp: Long, opType: OpType, name: String)
 
     @Query(
         "SELECT * FROM MediaEntity" +

@@ -6,6 +6,7 @@ import com.xayah.core.data.repository.MediaRepository
 import com.xayah.core.data.repository.TaskRepository
 import com.xayah.core.database.dao.MediaDao
 import com.xayah.core.database.dao.TaskDao
+import com.xayah.core.database.dao.UploadIdDao
 import com.xayah.core.model.OpType
 import com.xayah.core.model.OperationState
 import com.xayah.core.model.TaskType
@@ -15,7 +16,6 @@ import com.xayah.core.model.database.ProcessingInfoEntity
 import com.xayah.core.model.database.TaskDetailMediaEntity
 import com.xayah.core.model.database.TaskEntity
 import com.xayah.core.network.client.CloudClient
-import com.xayah.core.database.dao.UploadIdDao
 import com.xayah.core.network.client.S3ClientImpl
 import com.xayah.core.rootservice.service.RemoteRootService
 import com.xayah.core.service.util.CommonBackupUtil
@@ -76,20 +76,13 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
         mClient.mkdirRecursively(mRemoteConfigsDir)
     }
 
-    private fun getRemoteFileDir(archivesRelativeDir: String) =
-        "${mRemoteFilesDir}/${archivesRelativeDir}"
+    private fun getRemoteFileDir(archivesRelativeDir: String) = "${mRemoteFilesDir}/${archivesRelativeDir}"
 
-    override suspend fun onFileDirCreated(archivesRelativeDir: String): Boolean =
-        runCatchingOnService {
-            mClient.mkdirRecursively(getRemoteFileDir(archivesRelativeDir))
-        }
+    override suspend fun onFileDirCreated(archivesRelativeDir: String): Boolean = runCatchingOnService {
+        mClient.mkdirRecursively(getRemoteFileDir(archivesRelativeDir))
+    }
 
-    override suspend fun backup(
-        m: MediaEntity,
-        r: MediaEntity?,
-        t: TaskDetailMediaEntity,
-        dstDir: String
-    ) {
+    override suspend fun backup(m: MediaEntity, r: MediaEntity?, t: TaskDetailMediaEntity, dstDir: String) {
         val remoteFileDir = getRemoteFileDir(m.archivesRelativeDir)
 
         val result = mMediumBackupUtil.backupMedia(
@@ -168,15 +161,16 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
     override suspend fun onCleanupIncompleteBackup(currentIndex: Int) {
         log { "Cleaning up incomplete cloud file backup from index: $currentIndex" }
 
-        // 直接使用类变量而不是从实体获取
         val timestamp = mBackupTimestamp
 
-        // 1. 删除远程文件(使用 deleteRecursively 而不是 listObjects)
+        // 1. 删除远程文件并标记/删除数据库记录 - 只处理未完成的媒体(index >= currentIndex)
         mMediaEntities.forEachIndexed { index, media ->
-            if (index >= currentIndex) {
-                val remoteFileDir = getRemoteFileDir(media.mediaEntity.archivesRelativeDir)
+            if (index >= currentIndex && media.mediaEntity.indexInfo.backupTimestamp == timestamp) {
+                val m = media.mediaEntity
+                val remoteFileDir = getRemoteFileDir(m.archivesRelativeDir)
                 log { "Cleaning up incomplete backup at: $remoteFileDir (index: $index)" }
 
+                // 删除远程文件
                 runCatching {
                     mClient.deleteRecursively(remoteFileDir)
                 }.onSuccess {
@@ -184,30 +178,30 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
                 }.onFailure { e ->
                     log { "Failed to cleanup: ${e.message}" }
                 }
+
+                // 标记这个特定的媒体为已取消
+                log { "Marking media ${m.name} as canceled" }
+                runCatching {
+                    mMediaDao.markAsCanceledByTimestamp(timestamp, m.name)
+                }.onSuccess {
+                    log { "Successfully marked media as canceled" }
+                }.onFailure { e ->
+                    log { "Failed to mark media as canceled: ${e.message}" }
+                }
+
+                // 删除这个特定媒体的数据库记录(仅删除 RESTORE 类型)
+                log { "Deleting canceled media ${m.name} from database (OpType.RESTORE only)" }
+                runCatching {
+                    mMediaDao.deleteCanceledByTimestamp(timestamp, OpType.RESTORE, m.name)
+                }.onSuccess {
+                    log { "Successfully deleted canceled media from database" }
+                }.onFailure { e ->
+                    log { "Failed to delete canceled media: ${e.message}" }
+                }
             }
         }
 
-        // 2. 标记数据库中的取消记录
-        log { "Marking all media with timestamp $timestamp as canceled" }
-        runCatching {
-            mMediaDao.markAsCanceledByTimestamp(timestamp)
-        }.onSuccess {
-            log { "Successfully marked media as canceled" }
-        }.onFailure { e ->
-            log { "Failed to mark media as canceled: ${e.message}" }
-        }
-
-        // 3. 删除数据库中的取消标记
-        log { "Deleting canceled media from database" }
-        runCatching {
-            mMediaDao.deleteCanceledByTimestamp(timestamp)
-        }.onSuccess {
-            log { "Successfully deleted canceled media from database" }
-        }.onFailure { e ->
-            log { "Failed to delete canceled media: ${e.message}" }
-        }
-
-        // 4. 清理相关的 uploadId
+        // 2. 清理相关的 uploadId
         log { "Cleaning up uploadId records for timestamp: $timestamp" }
         runCatching {
             val allUploadIds = mUploadIdDao.getAll()
@@ -221,7 +215,6 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
                 if (belongsToThisBackup) {
                     log { "Aborting multipart upload: ${uploadIdEntity.uploadId} for key: ${uploadIdEntity.key}" }
                     runCatching {
-                        // 类型检查后调用 S3 特定方法
                         if (mClient is S3ClientImpl) {
                             (mClient as S3ClientImpl).abortMultipartUpload(
                                 bucket = uploadIdEntity.bucket,
@@ -242,131 +235,131 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
         }
     }
 
-        override suspend fun onItselfSaved(path: String, entity: ProcessingInfoEntity) {
-            entity.update(state = OperationState.UPLOADING)
-            var flag = true
-            var progress = 0f
-            var speed = 0L
-            var lastBytes = 0L
-            var lastTime = System.currentTimeMillis()
+    override suspend fun onItselfSaved(path: String, entity: ProcessingInfoEntity) {
+        entity.update(state = OperationState.UPLOADING)
+        var flag = true
+        var progress = 0f
+        var speed = 0L
+        var lastBytes = 0L
+        var lastTime = System.currentTimeMillis()
 
-            with(CoroutineScope(coroutineContext)) {
-                launch {
-                    while (flag) {
-                        val speedText = if (speed > 0) speed.formatToStorageSizePerSecond() else ""
-                        val content = if (speedText.isNotEmpty()) {
-                            "$speedText | ${(progress * 100).toInt()}%"
-                        } else {
-                            "${(progress * 100).toInt()}%"
-                        }
-                        entity.update(content = content)
-                        delay(500)
+        with(CoroutineScope(coroutineContext)) {
+            launch {
+                while (flag) {
+                    val speedText = if (speed > 0) speed.formatToStorageSizePerSecond() else ""
+                    val content = if (speedText.isNotEmpty()) {
+                        "$speedText | ${(progress * 100).toInt()}%"
+                    } else {
+                        "${(progress * 100).toInt()}%"
                     }
+                    entity.update(content = content)
+                    delay(500)
                 }
             }
-
-            mCloudRepo.upload(
-                client = mClient,
-                src = path,
-                dstDir = mRemotePath,
-                onUploading = { read, total ->
-                    progress = read.toFloat() / total
-                    val currentTime = System.currentTimeMillis()
-                    val timeDiff = currentTime - lastTime
-                    if (timeDiff >= 500) {
-                        val bytesDiff = read - lastBytes
-                        speed = if (timeDiff > 0) (bytesDiff * 1000 / timeDiff) else 0L
-                        lastTime = currentTime
-                        lastBytes = read
-                    }
-                },
-                isCanceled = { isCanceled() }
-            ).apply {
-                flag = false
-                entity.update(
-                    state = if (isSuccess) OperationState.DONE else OperationState.ERROR,
-                    log = if (isSuccess) null else outString,
-                    content = "100%"
-                )
-            }
         }
 
-        override suspend fun onConfigsSaved(path: String, entity: ProcessingInfoEntity) {
-            entity.update(state = OperationState.UPLOADING)
-            var flag = true
-            var progress = 0f
-            var speed = 0L
-            var lastBytes = 0L
-            var lastTime = System.currentTimeMillis()
-
-            with(CoroutineScope(coroutineContext)) {
-                launch {
-                    while (flag) {
-                        val speedText = if (speed > 0) speed.formatToStorageSizePerSecond() else ""
-                        val content = if (speedText.isNotEmpty()) {
-                            "$speedText | ${(progress * 100).toInt()}%"
-                        } else {
-                            "${(progress * 100).toInt()}%"
-                        }
-                        entity.update(content = content)
-                        delay(500)
-                    }
+        mCloudRepo.upload(
+            client = mClient,
+            src = path,
+            dstDir = mRemotePath,
+            onUploading = { read, total ->
+                progress = read.toFloat() / total
+                val currentTime = System.currentTimeMillis()
+                val timeDiff = currentTime - lastTime
+                if (timeDiff >= 500) {
+                    val bytesDiff = read - lastBytes
+                    speed = if (timeDiff > 0) (bytesDiff * 1000 / timeDiff) else 0L
+                    lastTime = currentTime
+                    lastBytes = read
                 }
-            }
-
-            mCloudRepo.upload(
-                client = mClient,
-                src = path,
-                dstDir = mRemoteConfigsDir,
-                onUploading = { read, total ->
-                    progress = read.toFloat() / total
-                    val currentTime = System.currentTimeMillis()
-                    val timeDiff = currentTime - lastTime
-                    if (timeDiff >= 500) {
-                        val bytesDiff = read - lastBytes
-                        speed = if (timeDiff > 0) (bytesDiff * 1000 / timeDiff) else 0L
-                        lastTime = currentTime
-                        lastBytes = read
-                    }
-                },
-                isCanceled = { isCanceled() }
-            ).apply {
-                flag = false
-                entity.update(
-                    state = if (isSuccess) OperationState.DONE else OperationState.ERROR,
-                    log = if (isSuccess) null else outString,
-                    content = "100%"
-                )
-            }
+            },
+            isCanceled = { isCanceled() }
+        ).apply {
+            flag = false
+            entity.update(
+                state = if (isSuccess) OperationState.DONE else OperationState.ERROR,
+                log = if (isSuccess) null else outString,
+                content = "100%"
+            )
         }
-
-        override suspend fun clear() {
-            mRootService.deleteRecursively(mRootDir)
-            mClient.disconnect()
-        }
-
-        @Inject
-        override lateinit var mMediaDao: MediaDao
-
-        @Inject
-        override lateinit var mMediaRepo: MediaRepository
-
-        @Inject
-        override lateinit var mMediumBackupUtil: MediumBackupUtil
-
-        override val mRootDir by lazy { mPathUtil.getCloudTmpDir() }
-        override val mFilesDir by lazy { mPathUtil.getCloudTmpFilesDir() }
-        override val mConfigsDir by lazy { mPathUtil.getCloudTmpConfigsDir() }
-
-        @Inject
-        lateinit var mCloudRepo: CloudRepository
-
-        @Inject
-        lateinit var mUploadIdDao: UploadIdDao
-
-        private lateinit var mCloudEntity: CloudEntity
-        private lateinit var mClient: CloudClient
-        private lateinit var mRemotePath: String
-        private lateinit var mRemoteFilesDir: String
-        private lateinit var mRemoteConfigsDir: String
     }
+
+    override suspend fun onConfigsSaved(path: String, entity: ProcessingInfoEntity) {
+        entity.update(state = OperationState.UPLOADING)
+        var flag = true
+        var progress = 0f
+        var speed = 0L
+        var lastBytes = 0L
+        var lastTime = System.currentTimeMillis()
+
+        with(CoroutineScope(coroutineContext)) {
+            launch {
+                while (flag) {
+                    val speedText = if (speed > 0) speed.formatToStorageSizePerSecond() else ""
+                    val content = if (speedText.isNotEmpty()) {
+                        "$speedText | ${(progress * 100).toInt()}%"
+                    } else {
+                        "${(progress * 100).toInt()}%"
+                    }
+                    entity.update(content = content)
+                    delay(500)
+                }
+            }
+        }
+
+        mCloudRepo.upload(
+            client = mClient,
+            src = path,
+            dstDir = mRemoteConfigsDir,
+            onUploading = { read, total ->
+                progress = read.toFloat() / total
+                val currentTime = System.currentTimeMillis()
+                val timeDiff = currentTime - lastTime
+                if (timeDiff >= 500) {
+                    val bytesDiff = read - lastBytes
+                    speed = if (timeDiff > 0) (bytesDiff * 1000 / timeDiff) else 0L
+                    lastTime = currentTime
+                    lastBytes = read
+                }
+            },
+            isCanceled = { isCanceled() }
+        ).apply {
+            flag = false
+            entity.update(
+                state = if (isSuccess) OperationState.DONE else OperationState.ERROR,
+                log = if (isSuccess) null else outString,
+                content = "100%"
+            )
+        }
+    }
+
+    override suspend fun clear() {
+        mRootService.deleteRecursively(mRootDir)
+        mClient.disconnect()
+    }
+
+    @Inject
+    override lateinit var mMediaDao: MediaDao
+
+    @Inject
+    override lateinit var mMediaRepo: MediaRepository
+
+    @Inject
+    override lateinit var mMediumBackupUtil: MediumBackupUtil
+
+    override val mRootDir by lazy { mPathUtil.getCloudTmpDir() }
+    override val mFilesDir by lazy { mPathUtil.getCloudTmpFilesDir() }
+    override val mConfigsDir by lazy { mPathUtil.getCloudTmpConfigsDir() }
+
+    @Inject
+    lateinit var mCloudRepo: CloudRepository
+
+    @Inject
+    lateinit var mUploadIdDao: UploadIdDao
+
+    private lateinit var mCloudEntity: CloudEntity
+    private lateinit var mClient: CloudClient
+    private lateinit var mRemotePath: String
+    private lateinit var mRemoteFilesDir: String
+    private lateinit var mRemoteConfigsDir: String
+}
