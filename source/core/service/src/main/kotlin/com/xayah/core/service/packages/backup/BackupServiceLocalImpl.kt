@@ -13,6 +13,7 @@ import com.xayah.core.model.database.TaskEntity
 import com.xayah.core.rootservice.service.RemoteRootService
 import com.xayah.core.service.util.CommonBackupUtil
 import com.xayah.core.service.util.PackagesBackupUtil
+import com.xayah.core.service.util.BackupResult  // 👈 添加这个导入
 import com.xayah.core.util.PathUtil
 import com.xayah.core.util.localBackupSaveDir
 import com.xayah.core.model.OperationState

@@ -33,6 +33,10 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import kotlin.coroutines.coroutineContext
+import java.io.File
+import java.util.concurrent.CancellationException
+import com.xayah.core.service.util.ResticBackupUtil
+import com.xayah.core.service.util.BackupResult
 
 class PackagesBackupUtil @Inject constructor(
     @ApplicationContext val context: Context,
@@ -41,6 +45,7 @@ class PackagesBackupUtil @Inject constructor(
     private val packageRepository: PackageRepository,
     private val commonBackupUtil: CommonBackupUtil,
     private val cloudRepository: CloudRepository,
+    private val resticUtil: ResticBackupUtil, // ADDED: Inject ResticBackupUtil
 ) {
     companion object {
         private const val TAG = "PackagesBackupUtil"
@@ -228,64 +233,42 @@ class PackagesBackupUtil @Inject constructor(
         t: TaskDetailPackageEntity,
         dstDir: String,
         isCanceled: (() -> Boolean)? = null
-    ): ShellResult = run {
+    ): BackupResult = run {
         log { "Backing up apk..." }
 
         val dataType = DataType.PACKAGE_APK
         val packageName = p.packageName
         val userId = p.userId
-        val ct = p.indexInfo.compressionType
-        val dst = packageRepository.getArchiveDst(dstDir = dstDir, dataType = dataType, ct = ct)
-        var isSuccess: Boolean
-        val out = mutableListOf<String>()
         val srcDir = getPackageSourceDir(packageName = packageName, userId = userId)
 
-        if (p.getDataSelected(dataType).not()) {
-            isSuccess = true
-            t.updateInfo(dataType = dataType, state = OperationState.SKIP)
-        } else {
-            if (srcDir.isNotEmpty()) {
-                val sizeBytes = rootService.calculateSize(srcDir)
-                t.updateInfo(
-                    dataType = dataType,
-                    state = OperationState.PROCESSING,
-                    bytes = sizeBytes
-                )
-                if (rootService.exists(dst) && sizeBytes == r?.getDataBytes(dataType)) {
-                    isSuccess = true
-                    t.updateInfo(dataType = dataType, state = OperationState.SKIP)
-                    out.add(log { "Data has not changed." })
-                } else {
-                    Tar.compressInCur(
-                        cur = srcDir,
-                        src = "./*.apk",
-                        dst = dst,
-                        extra = ct.getCompressPara(context.readCompressionLevel().first())
-                    ).also { result ->
-                        isSuccess = result.isSuccess
-                        out.addAll(result.out)
+        // 获取当前协程的 Scope，用于启动非阻塞的更新任务
+        val currentScope = CoroutineScope(coroutineContext)
 
-                        // 压缩完成后立即检查取消标志
-                        if (isCanceled?.invoke() == true) {
-                            log { "Backup canceled after compression" }
-                            isSuccess = false
-                            out.add("Backup canceled by user")
-                            return@run ShellResult(code = -1, input = listOf(), out = out)
-                        }
-                    }
-                }
-            } else {
-                isSuccess = false
-                out.add(log { "Failed to get apk path of $packageName." })
-            }
-            t.updateInfo(
-                dataType = dataType,
-                state = if (isSuccess) OperationState.DONE else OperationState.ERROR,
-                log = out.toLineString()
-            )
+        if (p.getDataSelected(dataType).not()) {
+            return BackupResult.success("")
         }
 
-        ShellResult(code = if (isSuccess) 0 else -1, input = listOf(), out = out)
+        if (srcDir.isEmpty()) {
+            return BackupResult.failed("Failed to get apk path of $packageName")
+        }
+
+        // val resticUtil = ResticBackupUtil(context) // REMOVED local instantiation
+        return resticUtil.backupWithRestic( // USED injected resticUtil
+            sourcePath = srcDir,  // 使用 srcDir 而不是 apkPath
+            localRepoPath = getLocalResticRepoPath(),
+            password = getResticPassword(),
+            onProgress = { progress: Float ->
+                // 修复点: 移除同步调用，使用 launch 启动非阻塞更新 (257行)
+                currentScope.launch {
+                    t.updateInfo(dataType = DataType.PACKAGE_APK, bytes = (progress * 100).toLong())
+                }
+            },
+            onCancel = {
+                if (isCanceled?.invoke() == true) {
+                    throw CancellationException()
+                }
+            }
+        )
     }
 
     /**
@@ -298,112 +281,46 @@ class PackagesBackupUtil @Inject constructor(
         dataType: DataType,
         dstDir: String,
         isCanceled: (() -> Boolean)? = null
-    ): ShellResult = run {
+    ): BackupResult = run {
         log { "Backing up ${dataType.type}..." }
 
         val packageName = p.packageName
         val userId = p.userId
-        val ct = p.indexInfo.compressionType
-        val dst = packageRepository.getArchiveDst(dstDir = dstDir, dataType = dataType, ct = ct)
-        var isSuccess: Boolean
-        val out = mutableListOf<String>()
         val srcDir = packageRepository.getDataSrcDir(dataType, userId)
 
+        // 获取当前协程的 Scope，用于启动非阻塞的更新任务
+        val currentScope = CoroutineScope(coroutineContext)
+
         if (p.getDataSelected(dataType).not()) {
-            isSuccess = true
-            t.updateInfo(dataType = dataType, state = OperationState.SKIP)
-        } else {
-            // Check the existence of origin path.
-            val src = packageRepository.getDataSrc(srcDir, packageName)
-            rootService.exists(src).also {
-                if (it.not()) {
-                    if (dataType == DataType.PACKAGE_USER) {
-                        isSuccess = false
-                        out.add(log { "Not exist: $src" })
-                        t.updateInfo(
-                            dataType = dataType,
-                            state = OperationState.ERROR,
-                            log = out.toLineString()
-                        )
-                        return@run ShellResult(code = -1, input = listOf(), out = out)
-                    } else {
-                        out.add(log { "Not exist and skip: $src" })
-                        t.updateInfo(
-                            dataType = dataType,
-                            state = OperationState.SKIP,
-                            log = out.toLineString()
-                        )
-                        return@run ShellResult(code = -2, input = listOf(), out = out)
-                    }
-                }
-            }
-
-            // Generate exclusion items.
-            val exclusionList = mutableListOf<String>()
-            when (dataType) {
-                DataType.PACKAGE_USER, DataType.PACKAGE_USER_DE -> {
-                    // Exclude cache
-                    val folders = listOf(".ota", "cache", "lib", "code_cache", "no_backup")
-                    exclusionList.addAll(folders.map { "${SymbolUtil.QUOTE}$packageName/$it${SymbolUtil.QUOTE}" })
-                }
-
-                DataType.PACKAGE_DATA, DataType.PACKAGE_OBB, DataType.PACKAGE_MEDIA -> {
-                    // Exclude cache
-                    val folders = listOf("cache")
-                    exclusionList.addAll(folders.map { "${SymbolUtil.QUOTE}$packageName/$it${SymbolUtil.QUOTE}" })
-                    // Exclude Backup_*
-                    exclusionList.add("${SymbolUtil.QUOTE}Backup_${SymbolUtil.QUOTE}*")
-                }
-
-                else -> {}
-            }
-            log { "ExclusionList: $exclusionList." }
-
-            val sizeBytes = rootService.calculateSize(src)
-            t.updateInfo(dataType = dataType, state = OperationState.PROCESSING, bytes = sizeBytes)
-            if (rootService.exists(dst) && sizeBytes == r?.getDataBytes(dataType)) {
-                isSuccess = true
-                t.updateInfo(dataType = dataType, state = OperationState.SKIP)
-                out.add(log { "Data has not changed." })
-            } else {
-                // Compress and test.
-                Tar.compress(
-                    exclusionList = exclusionList,
-                    h = if (context.readFollowSymlinks().first()) "-h" else "",
-                    srcDir = srcDir,
-                    src = packageName,
-                    dst = dst,
-                    extra = ct.getCompressPara(context.readCompressionLevel().first())
-                ).also { result ->
-                    isSuccess = result.isSuccess
-                    out.addAll(result.out)
-
-                    // 压缩完成后立即检查取消标志
-                    if (isCanceled?.invoke() == true) {
-                        log { "Backup canceled after compression" }
-                        isSuccess = false
-                        out.add("Backup canceled by user")
-                        return@run ShellResult(code = -1, input = listOf(), out = out)
-                    }
-                }
-                commonBackupUtil.testArchive(src = dst, ct = ct).also { result ->
-                    isSuccess = isSuccess && result.isSuccess
-                    out.addAll(result.out)
-                    if (result.isSuccess) {
-                        p.setDataBytes(dataType, sizeBytes)
-                        p.setDisplayBytes(dataType, rootService.calculateSize(dst))
-                    }
-                }
-            }
-
-            t.updateInfo(
-                dataType = dataType,
-                state = if (isSuccess) OperationState.DONE else OperationState.ERROR,
-                log = out.toLineString()
-            )
+            return BackupResult.success("")
         }
 
-        ShellResult(code = if (isSuccess) 0 else -1, input = listOf(), out = out)
+        val src = packageRepository.getDataSrc(srcDir, packageName)
+        if (!rootService.exists(src)) {
+            if (dataType == DataType.PACKAGE_USER) {
+                return BackupResult.failed("Not exist: $src")
+            } else {
+                return BackupResult.success("")
+            }
+        }
+
+        // val resticUtil = ResticBackupUtil(context) // REMOVED local instantiation
+        return resticUtil.backupWithRestic( // USED injected resticUtil
+            sourcePath = src,  // 使用 src 而不是 apkPath
+            localRepoPath = getLocalResticRepoPath(),
+            password = getResticPassword(),
+            onProgress = { progress: Float ->
+                // 修复点: 移除同步调用，使用 launch 启动非阻塞更新 (303行)
+                currentScope.launch {
+                    t.updateInfo(dataType = dataType, bytes = (progress * 100).toLong())  // 使用正确的 dataType
+                }
+            },
+            onCancel = {
+                if (isCanceled?.invoke() == true) {
+                    throw CancellationException()
+                }
+            }
+        )
     }
 
     suspend fun backupPermissions(p: PackageEntity) = run {
@@ -444,11 +361,16 @@ class PackagesBackupUtil @Inject constructor(
         dataType: DataType,
         srcDir: String,
         dstDir: String,
-        isCanceled: (() -> Boolean)? = null  // 新增参数
+        customFileName: String? = null,
+        isCanceled: (() -> Boolean)? = null
     ) = run {
         val ct = p.indexInfo.compressionType
         val src = packageRepository.getArchiveDst(dstDir = srcDir, dataType = dataType, ct = ct)
-        t.updateInfo(dataType = dataType, state = OperationState.UPLOADING)
+
+        // 确保 updateInfo 在协程中运行
+        with(CoroutineScope(coroutineContext)) {
+            launch { t.updateInfo(dataType = dataType, state = OperationState.UPLOADING) }
+        }
 
         var flag = true
         var progress = 0f
@@ -459,7 +381,6 @@ class PackagesBackupUtil @Inject constructor(
         with(CoroutineScope(coroutineContext)) {
             launch {
                 while (flag) {
-                    // 在进度更新循环中也检查取消标志
                     if (isCanceled?.invoke() == true) {
                         log { "Upload progress monitoring canceled" }
                         flag = false
@@ -472,7 +393,8 @@ class PackagesBackupUtil @Inject constructor(
                     } else {
                         "${(progress * 100).toInt()}%"
                     }
-                    t.updateInfo(dataType = dataType, content = content)
+                    // 确保 updateInfo 在协程中运行
+                    launch { t.updateInfo(dataType = dataType, content = content) }
                     delay(500)
                 }
             }
@@ -493,15 +415,28 @@ class PackagesBackupUtil @Inject constructor(
                     lastBytes = read
                 }
             },
-            isCanceled = isCanceled  // 传递取消检查
+            isCanceled = isCanceled
         ).apply {
             flag = false
-            t.updateInfo(
-                dataType = dataType,
-                state = if (isSuccess) OperationState.DONE else OperationState.ERROR,
-                log = t.getLog(dataType) + "\n${outString}",
-                content = "100%"
-            )
+            // 确保 updateInfo 在协程中运行
+            with(CoroutineScope(coroutineContext)) {
+                launch {
+                    t.updateInfo(
+                        dataType = dataType,
+                        state = if (isSuccess) OperationState.DONE else OperationState.ERROR,
+                        log = t.getLog(dataType) + "\n${outString}",
+                        content = "100%"
+                    )
+                }
+            }
         }
+    }
+
+    private fun getLocalResticRepoPath(): String {
+        return File(context.filesDir, "restic-repo").absolutePath
+    }
+
+    private fun getResticPassword(): String {
+        return "restic-backup-password"
     }
 }

@@ -23,6 +23,7 @@ import com.xayah.core.rootservice.service.RemoteRootService
 import com.xayah.core.service.util.CommonBackupUtil
 import com.xayah.core.service.util.PackagesBackupUtil
 import com.xayah.core.util.PathUtil
+import com.xayah.core.service.util.BackupResult
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -85,11 +86,7 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
     }
 
     override suspend fun backup(type: DataType, p: PackageEntity, r: PackageEntity?, t: TaskDetailPackageEntity, dstDir: String) {
-        // 在开始备份前检查取消标志
-        if (isCanceled()) {
-            log { "Backup canceled before processing $type" }
-            return
-        }
+        if (isCanceled()) return
 
         val remoteAppDir = getRemoteAppDir(p.archivesRelativeDir)
         val result = if (type == DataType.PACKAGE_APK) {
@@ -98,13 +95,13 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
             mPackagesBackupUtil.backupData(p = p, t = t, r = r, dataType = type, dstDir = dstDir, isCanceled = { isCanceled() })
         }
 
-        // 压缩后再次检查取消标志
-        if (isCanceled()) {
-            log { "Backup canceled after compression for $type" }
-            return
-        }
+        if (isCanceled()) return
 
+        // 适配新的 BackupResult 类型
         if (result.isSuccess && t.get(type).state != OperationState.SKIP) {
+            // 生成基于快照ID的文件名用于上传
+            val fileName = "${p.packageName}_${type.type}_${(result as BackupResult.Success).snapshotId}.restic"
+
             mPackagesBackupUtil.upload(
                 client = mClient,
                 p = p,
@@ -112,11 +109,10 @@ internal class BackupServiceCloudImpl @Inject constructor() : AbstractBackupServ
                 dataType = type,
                 srcDir = dstDir,
                 dstDir = remoteAppDir,
+                customFileName = fileName,  // 需要添加此参数到 upload() 方法
                 isCanceled = { isCanceled() }
             )
         }
-        t.update(dataType = type, progress = 1f)
-        t.update(processingIndex = t.processingIndex + 1)
     }
 
     override suspend fun onConfigSaved(path: String, archivesRelativeDir: String) {
