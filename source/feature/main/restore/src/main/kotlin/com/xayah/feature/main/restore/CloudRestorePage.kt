@@ -122,7 +122,7 @@ fun CloudRestorePage(
                         ) {
                             items(
                                 currentState.groups,
-                                key = { item: ResticBackupGroup -> "${item.packageName}-${item.timestamp}" }
+                                key = { item: ResticBackupGroup -> "${item.userId}-${item.packageName}-${item.timestamp}" }
                             ) { group: ResticBackupGroup ->
                                 ResticBackupGroupItem(
                                     group = group,

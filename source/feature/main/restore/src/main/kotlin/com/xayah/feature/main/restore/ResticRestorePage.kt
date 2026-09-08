@@ -124,7 +124,7 @@ fun ResticRestorePage(
                             // 修正后的 items 调用
                             items(
                                 currentState.groups,
-                                key = { item: ResticBackupGroup -> "${item.packageName}-${item.timestamp}" }
+                                key = { item: ResticBackupGroup -> "${item.userId}-${item.packageName}-${item.timestamp}" }
                             ) { group: ResticBackupGroup ->
                                 ResticBackupGroupItem(
                                     group = group,
@@ -214,7 +214,19 @@ fun ResticBackupGroupItem(
                         maxLines = 1,
                         modifier = Modifier.weight(1f, fill = false)
                     )
-
+                    if (group.userId != 0) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                            shape = RoundedCornerShape(50)
+                        ) {
+                            Text(
+                                text = stringResource(R.string.restore_clone_app),
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
                     if (!hasConfigSnapshot) {
                         Surface(
                             color = containerColor,

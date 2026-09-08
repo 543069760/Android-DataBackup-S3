@@ -60,4 +60,5 @@
     <!-- 文件类型（ResticFilesBackupDetailPage） -->
     <string name="restore_media_file">Media Files</string>
     <string name="restore_config_file">Config Files</string>
+    <string name="restore_clone_app">Cloned app</string>
 </resources>

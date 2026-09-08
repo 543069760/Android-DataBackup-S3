@@ -52,4 +52,5 @@
     <string name="restore_confirm_delete_cloud_file">确认删除该文件的所有云端快照?\n共计 %1$d 个快照</string>
     <string name="restore_media_file">媒体文件</string>
     <string name="restore_config_file">配置文件</string>
+    <string name="restore_clone_app">应用分身</string>
 </resources>
