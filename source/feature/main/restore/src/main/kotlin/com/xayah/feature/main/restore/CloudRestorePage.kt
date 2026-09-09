@@ -52,6 +52,8 @@ import com.xayah.core.ui.component.TextButton
 import com.xayah.core.ui.route.MainRoutes
 import com.xayah.core.util.DateUtil
 import com.xayah.core.util.navigateSingle
+import com.xayah.core.util.encodeAccountId
+import com.xayah.core.util.decodeURL
 import com.xayah.feature.main.restore.R
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -67,8 +69,7 @@ fun CloudRestorePage(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val iconVersion by viewModel.iconVersion.collectAsStateWithLifecycle()
     // accountName 在整个 Composable 内是常量，去前缀 + sanitize 只算一次，
-    // 与 CloudRestoreViewModel 的 accountId 算法逐字一致（都得 "COS"）
-    val accountId = accountName.replace("accountName=", "").replace(Regex("[^A-Za-z0-9]"), "_")
+    val accountId = encodeAccountId(accountName.replace("accountName=", "").decodeURL())
 
     LaunchedEffect(accountName) {
         viewModel.setCloudEntity(accountName)
@@ -81,7 +82,7 @@ fun CloudRestorePage(
 
     LaunchedEffect(needsRefresh?.value) {
         if (needsRefresh?.value == true) {
-            viewModel.forceReload()   // 若 forceReload 需 cloudEntity 参数，见下方说明
+            viewModel.forceReload()
             navController.currentBackStackEntry
                 ?.savedStateHandle
                 ?.set("cloud_needs_refresh", false)

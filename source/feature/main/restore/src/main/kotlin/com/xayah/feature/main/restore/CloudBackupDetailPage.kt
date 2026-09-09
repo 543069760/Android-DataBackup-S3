@@ -52,6 +52,8 @@ import com.xayah.core.ui.token.SizeTokens
 import com.xayah.core.util.DateUtil
 import com.xayah.core.util.localBackupSaveDir
 import com.xayah.core.util.navigateSingle
+import com.xayah.core.util.encodeAccountId
+import com.xayah.core.util.decodeURL
 import kotlinx.coroutines.launch
 import java.net.URLEncoder
 
@@ -235,7 +237,7 @@ fun CloudBackupDetailPage(
                 PackageIconImage(
                     packageName = group.packageName,
                     size = SizeTokens.Level64,
-                    accountId = accountName.replace(Regex("[^A-Za-z0-9]"), "_")
+                    accountId = encodeAccountId(accountName.replace("accountName=", "").decodeURL())
                 )
 
                 Column {

@@ -298,13 +298,23 @@ class PackagesBackupUtil @Inject constructor(
      * labels.json 的 key = "<userId>-<packageName>",value = 应用名(label)。
      * stripComponents=1 解压后落在 filesDir/icon/<accountId>/labels.json。
      */
-    suspend fun backupIconsAndLabels(dstDir: String): ShellResult = run {
+    suspend fun backupIconsAndLabels(dstDir: String, remoteIconDir: File? = null): ShellResult = run {
         log { "Backing up icons and labels..." }
 
+        // 判定 labels.json 的某个 value 是否为「退化值」（取名失败回退到了包名 / 空）
+        // key 形如 "<userId>-<packageName>"；userId 为整数，第一个 '-' 之后即包名
+        fun isDegradedLabel(key: String, value: String?): Boolean {
+            if (value.isNullOrBlank()) return true
+            val pkgName = key.substringAfter("-")   // 包名不含 '-'，可安全截取
+            return value == pkgName
+        }
         // 独立暂存目录：与恢复落地点 filesDir/icon/ 彻底解耦，根除套娃
         val stagingRoot = File(context.cacheDir, "icon_backup_staging")
         val stagingIconDir = File(stagingRoot, IconRelativeDir)   // .../icon_backup_staging/icon
         val liveIconDir = File("${context.filesDir()}/$IconRelativeDir")
+
+        // 保证 live 目录存在（后续要往里回写远端并集）
+        liveIconDir.mkdirs()
 
         runCatching {
             // 每次先清空暂存，保证干净
@@ -318,8 +328,33 @@ class PackagesBackupUtil @Inject constructor(
                     f.copyTo(File(stagingIconDir, f.name), overwrite = true)
                 }
             }
+        }.onFailure {
+            log { "Failed to prepare local icon staging: ${it.message}" }
+        }
 
-            // 2) labels.json：累积合并 + 全量映射（沿用你本地逻辑）
+        // 1.5) 远端 png 并集：远端覆盖本机同名、本机独有保留。
+        //      关键：同时写回 liveIconDir，让本机 live 目录逐次累积成完整集合，
+        //      使下一次备份的 staging（从 live 拷贝）天然为全集，icon.tar 不再坍缩。
+        var remotePngMerged = 0
+        if (remoteIconDir != null && remoteIconDir.exists()) {
+            remoteIconDir.listFiles()?.forEach { f ->
+                if (f.isFile && f.name.endsWith(".png")) {
+                    runCatching {
+                        // 写回 live（持久累积）
+                        f.copyTo(File(liveIconDir, f.name), overwrite = true)
+                        // 同步进本次打包的 staging
+                        f.copyTo(File(stagingIconDir, f.name), overwrite = true)
+                        remotePngMerged++
+                    }.onFailure {
+                        log { "Skip remote png ${f.name}: ${it.message}" }
+                    }
+                }
+            }
+            log { "remote png merged into live+staging: total=$remotePngMerged" }
+        }
+
+        // 2) labels.json：累积合并 + 全量映射；即使 png 合并部分失败也必须执行
+        runCatching {
             val activated = packageRepository.queryActivated(OpType.BACKUP)
             val labelMap: Map<String, String> = activated.associate { pkg ->
                 "${pkg.userId}-${pkg.packageName}" to pkg.packageInfo.label
@@ -335,17 +370,78 @@ class PackagesBackupUtil @Inject constructor(
                         .getOrElse { emptyMap() }
                 else emptyMap()
             }
+            // 远端 labels（远端覆盖本机）
+            val remoteMap: Map<String, String> =
+                if (remoteIconDir != null) File(remoteIconDir, "labels.json").let { rf ->
+                    if (rf.exists())
+                        runCatching { json.decodeFromString<Map<String, String>>(rf.readText()) }
+                            .getOrElse { emptyMap() }
+                    else emptyMap()
+                } else emptyMap()
+
             val mergedMap = oldMap + installedMap + labelMap
+            // 质量优先合并：
+            // - 本机缺失该键，或本机值为退化值（空/等于包名）→ 采用远端值（补充/救回）
+            // - 本机已有真实友好名 → 保留本机值，不被远端退化值覆盖
+            val finalMap: Map<String, String> = run {
+                val result = mergedMap.toMutableMap()
+                var overriddenByRemote = 0   // 远端补充/覆盖了本机的条数
+                var keptLocal = 0            // 本机真实名被保留、拒绝远端覆盖的条数
+                remoteMap.forEach { (k, remoteVal) ->
+                    val localVal = result[k]
+                    if (isDegradedLabel(k, localVal)) {
+                        // 本机缺失或退化：用远端（远端即便也退化，结果不更差）
+                        if (remoteVal != localVal) overriddenByRemote++
+                        result[k] = remoteVal
+                    } else {
+                        // 本机是真实友好名：保留，不让远端退化值盖掉
+                        keptLocal++
+                    }
+                }
+                log { "labels merge (quality-first): overriddenByRemote=$overriddenByRemote, keptLocal=$keptLocal, final=${result.size}" }
+                result
+            }
 
             // 持久保存到 live 目录（作为下次备份的累积源），并写一份进暂存目录用于本次打包
-            liveIconDir.mkdirs()
-            File(liveIconDir, "labels.json").writeText(json.encodeToString(mergedMap))
-            File(stagingIconDir, "labels.json").writeText(json.encodeToString(mergedMap))
-            log { "labels.json written: ${mergedMap.size} entries (old=${oldMap.size}, installed=${installedMap.size}, activated=${labelMap.size}) -> staging=${stagingIconDir.absolutePath}" }
+            File(liveIconDir, "labels.json").writeText(json.encodeToString(finalMap))
+            File(stagingIconDir, "labels.json").writeText(json.encodeToString(finalMap))
+            log {
+                "labels.json written: final=${finalMap.size} entries " +
+                        "(old=${oldMap.size}, installed=${installedMap.size}, activated=${labelMap.size}, " +
+                        "remote=${remoteMap.size}, merged=${mergedMap.size}) -> staging=${stagingIconDir.absolutePath}"
+            }
         }.onFailure {
-            // 失败不阻断图标备份，仅记录
-            log { "Failed to prepare icon staging: ${it.message}" }
+            log { "Failed to write labels.json: ${it.message}" }
         }
+
+        // 2.5) 打包前保障：staging 必须有 labels.json，否则用当前可得的 map 补写一次
+        runCatching {
+            val stagingLabels = File(stagingIconDir, "labels.json")
+            if (!stagingLabels.exists()) {
+                val activated = packageRepository.queryActivated(OpType.BACKUP)
+                val labelMap = activated.associate { pkg ->
+                    "${pkg.userId}-${pkg.packageName}" to pkg.packageInfo.label
+                }
+                val installedMap =
+                    packageRepository.queryPackages(OpType.BACKUP, blocked = false)
+                        .associate { pkg -> "${pkg.userId}-${pkg.packageName}" to pkg.packageInfo.label }
+                        .filterValues { it.isNotEmpty() }
+                val oldMap: Map<String, String> = File(liveIconDir, "labels.json").let { lf ->
+                    if (lf.exists())
+                        runCatching { json.decodeFromString<Map<String, String>>(lf.readText()) }
+                            .getOrElse { emptyMap() }
+                    else emptyMap()
+                }
+                stagingLabels.writeText(json.encodeToString(oldMap + installedMap + labelMap))
+            }
+            log { "labels.json presence before compress=${stagingLabels.exists()}, size=${stagingLabels.length()}" }
+        }.onFailure {
+            log { "labels.json presence guard failed: ${it.message}" }
+        }
+
+        // 统计最终 staging png 总数，便于 logcat 核对是否坍缩
+        val stagingPngTotal = stagingIconDir.listFiles()?.count { it.isFile && it.name.endsWith(".png") } ?: 0
+        log { "icon staging png total before compress=$stagingPngTotal (remoteMerged=$remotePngMerged)" }
 
         // 3) 只压缩暂存里的 icon 子目录（结构：icon/<pkg>.png + icon/labels.json），
         //    stripComponents=1 恢复后干净落到 filesDir/icon/<accountId>/，不再套娃

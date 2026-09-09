@@ -33,6 +33,11 @@ fun Context.tmpApksDir(): String = "${filesDir()}/$TmpRelativeDir/$ApksRelativeD
 fun Context.localBackupSaveDir(): String = runBlocking { readBackupSavePath().first() }
 fun Context.cloudTmpAbsoluteDir(): String = "${filesDir()}/$CloudTmpRelativeDir"
 
+fun encodeAccountId(raw: String): String =
+    if (raw.isEmpty()) ""
+    else java.util.Base64.getUrlEncoder().withoutPadding()
+        .encodeToString(raw.toByteArray(Charsets.UTF_8))
+
 class PathUtil @Inject constructor(
     @ApplicationContext private val context: Context,
 ) {
@@ -74,12 +79,19 @@ class PathUtil @Inject constructor(
         fun getPackageRestoreConfigDst(dstDir: String): String = "${dstDir}/$ConfigsPackageRestoreName"
         fun getMediaRestoreConfigDst(dstDir: String): String = "${dstDir}/$ConfigsMediaRestoreName"
 
-        suspend fun setFilesDirSELinux(context: Context) = SELinux.getContext(path = context.filesDir()).also { result ->
+        /**
+         * 对任意目录递归修 SELinux context + chown 到 App UID，
+         * 使 App 进程（非 root）可 list/read 该目录及其下文件。
+         * 用于 root 还原出来、属主为 root 的临时目录（如云端图标合并的 icon_remote_merge）。
+         */
+        suspend fun setDirSELinux(context: Context, path: String) = SELinux.getContext(path = context.filesDir()).also { result ->
             val pathContext = if (result.isSuccess) result.outString else ""
-            SELinux.chcon(context = pathContext, path = context.filesDir())
+            SELinux.chcon(context = pathContext, path = path)
             val uidGid = context.applicationInfo.uid.toUInt()
-            SELinux.chown(uid = uidGid, gid = uidGid, path = context.filesDir())
+            SELinux.chown(uid = uidGid, gid = uidGid, path = path)
         }
+
+        suspend fun setFilesDirSELinux(context: Context) = setDirSELinux(context, context.filesDir())
 
         fun getSsaidPath(userId: Int) = "/data/system/users/$userId/settings_ssaid.xml"
 

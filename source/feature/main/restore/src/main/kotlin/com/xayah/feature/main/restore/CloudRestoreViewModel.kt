@@ -36,6 +36,7 @@ import com.xayah.core.datastore.saveLoadedIconMD5
 import com.xayah.core.util.iconDir
 import com.xayah.core.util.PathUtil
 import com.xayah.core.util.IconRelativeDir
+import com.xayah.core.util.encodeAccountId
 import com.xayah.core.model.CompressionType
 import com.xayah.core.util.command.Tar
 import com.xayah.feature.main.restore.R
@@ -135,7 +136,7 @@ class CloudRestoreViewModel @Inject constructor(
                 _uiState.value = CloudRestoreUiState.Error(context.getString(R.string.restore_password_not_configured))
                 return@launch
             }
-            val accountId = cloudEntity.name.replace(Regex("[^A-Za-z0-9]"), "_")
+            val accountId = encodeAccountId(cloudEntity.name)
 
             // ---- 阶段一：读持久缓存（纯本地 SQLite 读，零网络），命中则秒开 ----
             val cachedApps: List<ResticBackupApp> = runCatching {
@@ -226,7 +227,7 @@ class CloudRestoreViewModel @Inject constructor(
             .sortedByDescending { it.timestamp }
 
     private suspend fun loadCloudIconsFromRestic(cloudEntity: CloudEntity, password: String) = withContext(Dispatchers.IO) {
-        val accountId = cloudEntity.name.replace(Regex("[^A-Za-z0-9]"), "_")
+        val accountId = encodeAccountId(cloudEntity.name)
         Log.d("IconRestore", "cloud enter, accountId=$accountId, type=${cloudEntity.type}")
 
         try {

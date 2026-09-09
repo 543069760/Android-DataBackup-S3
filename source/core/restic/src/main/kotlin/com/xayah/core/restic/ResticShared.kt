@@ -8,6 +8,7 @@ import com.xayah.core.model.restic.ResticBackupApp
 import com.xayah.core.model.restic.ResticBackupFiles
 import com.xayah.core.model.database.S3Extra
 import com.xayah.core.model.database.S3Protocol
+import com.xayah.core.util.encodeAccountId
 import com.xayah.core.rootservice.service.RemoteRootService
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -199,7 +200,7 @@ class ResticShared @Inject constructor(
     }
 
     /** sanitize 规则与图标账号目录一致 */
-    fun sanitizeAccountId(raw: String): String = raw.replace(Regex("[^A-Za-z0-9]"), "_")
+    fun sanitizeAccountId(raw: String): String = encodeAccountId(raw)
 
     /** 持久化 db 缓存目录：filesDir/db_cache（不会被系统低存储时清理，cacheDir 会） */
     private fun dbCacheDir(): File = File(context.filesDir, "db_cache").apply { if (!exists()) mkdirs() }

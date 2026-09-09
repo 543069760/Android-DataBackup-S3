@@ -33,6 +33,10 @@ import com.xayah.core.service.util.CommonBackupUtil
 import com.xayah.core.service.util.PackagesBackupUtil
 import com.xayah.core.util.PathUtil
 import com.xayah.core.util.localBackupSaveDir
+import com.xayah.core.util.encodeAccountId
+import com.xayah.core.util.command.Tar
+import com.xayah.core.util.IconRelativeDir
+import com.xayah.core.model.CompressionType
 import com.xayah.core.restic.ResticRepositoryFtp
 import com.xayah.core.model.database.FTPExtra
 import com.xayah.core.datastore.readFtpResticPassword
@@ -742,8 +746,7 @@ private suspend fun backupWithResticToWebdav(
         }
     }
 
-    private fun sanitizeTag(raw: String): String =
-        raw.replace(Regex("[^A-Za-z0-9]"), "_")
+    private fun sanitizeTag(raw: String): String = encodeAccountId(raw)
 
     override suspend fun onIconsSaved(path: String, entity: ProcessingInfoEntity) {
         val iconFile = File(path)
@@ -817,6 +820,116 @@ private suspend fun backupWithResticToWebdav(
             throw e
         } catch (e: Exception) {
             Log.e(mTAG, "SAVE_ICONS: cloud icon snapshot exception: ${e.message}", e)
+        }
+    }
+
+    /**
+     * 云端多端合并：拉取远端最新 __icons__ 快照并解压为本地目录，供 backupIconsAndLabels 做并集。
+     * 任何环节失败均返回 null（回退为纯本机备份，不阻断主流程）。
+     */
+    override suspend fun prepareRemoteIconsForMerge(): File? {
+        // 前缀算法必须与 onIconsSaved 的 tag、恢复端 accountId 完全一致（复用 sanitizeTag）
+        val prefix = "__icons__-${sanitizeTag(mCloudEntity.name)}-"
+        Log.d(mTAG, "ICON_MERGE: enter, prefix=$prefix, type=${mCloudEntity.type}")
+
+        // 密码解析：照抄 onIconsSaved 各 CloudType 分支
+        val password: String = try {
+            when (mCloudEntity.type) {
+                CloudType.FTP -> json.decodeFromString<FTPExtra>(mCloudEntity.extra)
+                    .resticPassword.ifEmpty { getResticPassword() }
+
+                CloudType.WEBDAV -> json.decodeFromString<WebDAVExtra>(mCloudEntity.extra)
+                    .resticPassword.ifEmpty { getResticPassword() }
+
+                CloudType.SFTP -> json.decodeFromString<SFTPExtra>(mCloudEntity.extra)
+                    .resticPassword.ifEmpty { getResticPassword() }
+
+                else -> json.decodeFromString<S3Extra>(mCloudEntity.extra)
+                    .resticPassword.ifEmpty { mContext.readS3ResticPassword() ?: getResticPassword() }
+            }
+        } catch (e: Exception) {
+            Log.w(mTAG, "ICON_MERGE: resolve password failed, skip merge: ${e.message}")
+            return null
+        }
+
+        var restoreTmp: File? = null
+        try {
+            // 1. 列快照
+            val snapshots: List<ResticSnapshot> = when (mCloudEntity.type) {
+                CloudType.FTP    -> resticRepoFtp.listSnapshotsFromFtp(mCloudEntity, password)
+                CloudType.WEBDAV -> resticRepoWebdav.listSnapshotsFromWebdav(mCloudEntity, password)
+                CloudType.SFTP   -> resticRepoSftp.listSnapshotsFromSftp(mCloudEntity, password)
+                else             -> resticRepoCos.listSnapshotsFromCos(mCloudEntity, password)
+            }
+            Log.d(mTAG, "ICON_MERGE: snapshots total=${snapshots.size}")
+
+            // 2. 筛 __icons__-<accountId>- 前缀，取 time 最新
+            val matched = snapshots.filter { snap -> snap.tags.any { it.startsWith(prefix) } }
+            val latest = matched.maxByOrNull { it.time }
+            if (latest == null) {
+                Log.d(mTAG, "ICON_MERGE: no remote icon snapshot, skip merge (matched=${matched.size})")
+                return null
+            }
+            val snapshotId = latest.id
+            Log.d(mTAG, "ICON_MERGE: matched=${matched.size}, selected=$snapshotId, tags=${latest.tags}")
+
+            // 3. 整快照还原到临时目录
+            restoreTmp = File(mContext.cacheDir, "icon_remote_merge_restore").apply {
+                deleteRecursively(); mkdirs()
+            }
+            val ok = when (mCloudEntity.type) {
+                CloudType.FTP    -> resticRepoFtp.restoreSnapshotFromFtp(mCloudEntity, password, snapshotId, restoreTmp.absolutePath)
+                CloudType.WEBDAV -> resticRepoWebdav.restoreSnapshotFromWebdav(mCloudEntity, password, snapshotId, restoreTmp.absolutePath)
+                CloudType.SFTP   -> resticRepoSftp.restoreSnapshotFromSftp(mCloudEntity, password, snapshotId, restoreTmp.absolutePath)
+                else             -> resticRepoCos.restoreSnapshotFromCos(mCloudEntity, password, snapshotId, restoreTmp.absolutePath)
+            }
+            if (!ok) {
+                Log.w(mTAG, "ICON_MERGE: restore snapshot failed, snapshotId=$snapshotId")
+                restoreTmp.deleteRecursively()
+                return null
+            }
+
+            // 4. 递归找 icon.tar
+            val iconTar = restoreTmp.walkTopDown().firstOrNull {
+                it.isFile && it.name == "$IconRelativeDir.${CompressionType.TAR.suffix}"
+            }
+            if (iconTar == null) {
+                Log.w(mTAG, "ICON_MERGE: icon.tar not found in ${restoreTmp.absolutePath}")
+                restoreTmp.deleteRecursively()
+                return null
+            }
+            Log.d(mTAG, "ICON_MERGE: found icon.tar=${iconTar.absolutePath}, size=${iconTar.length()}")
+
+            // 5. 解压到独立合并目录（供 backupIconsAndLabels 读取；由调用方 finally 清理）
+            val mergeDir = File(mContext.cacheDir, "icon_remote_merge").apply {
+                deleteRecursively(); mkdirs()
+            }
+            Tar.decompress(
+                cacheDir = mContext.cacheDir.path,
+                callTar = { o, e, argv -> mRootService.callTarCli(o, e, argv) },
+                src = iconTar.absolutePath,
+                dst = mergeDir.absolutePath,
+                stripComponents = 1,
+            )
+            restoreTmp.deleteRecursively()
+
+            // 5.1 关键修复：Tar 由 root 解压，产物属主为 root，App UID 无读权限（EACCES）。
+            //      递归把 mergeDir 的 SELinux context 与属主改回 App，使 backupIconsAndLabels 能读 png/labels.json。
+            PathUtil.setDirSELinux(mContext, mergeDir.absolutePath)
+            val canList = mergeDir.listFiles()?.size ?: -1
+            Log.d(mTAG, "ICON_MERGE: fixed permissions on ${mergeDir.absolutePath}, files=$canList")
+
+            val remotePng = mergeDir.listFiles()?.count { it.isFile && it.name.endsWith(".png") } ?: 0
+            val remoteLabels = File(mergeDir, "labels.json").exists()
+            Log.d(mTAG, "ICON_MERGE: decompressed to ${mergeDir.absolutePath}, remotePng=$remotePng, labels.json=$remoteLabels")
+            return mergeDir
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            restoreTmp?.deleteRecursively()
+            throw e
+        } catch (e: Exception) {
+            Log.w(mTAG, "ICON_MERGE: exception, fallback to local-only: ${e.message}", e)
+            restoreTmp?.deleteRecursively()
+            return null
         }
     }
 

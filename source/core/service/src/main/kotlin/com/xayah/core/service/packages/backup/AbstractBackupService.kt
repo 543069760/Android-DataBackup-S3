@@ -180,6 +180,7 @@ internal abstract class AbstractBackupService : AbstractPackagesService() {
     protected open suspend fun onItselfSaved(path: String, entity: ProcessingInfoEntity) {}
     protected open suspend fun onConfigsSaved(path: String, entity: ProcessingInfoEntity) {}
     protected open suspend fun onIconsSaved(path: String, entity: ProcessingInfoEntity) {}
+    protected open suspend fun prepareRemoteIconsForMerge(): File? = null
     protected open suspend fun clear() {
         // 清理停止文件
         cleanupStopFiles()
@@ -627,11 +628,17 @@ internal abstract class AbstractBackupService : AbstractPackagesService() {
                     mContext.getString(R.string.backing_up),
                     mContext.getString(R.string.save_icons)
                 )
-                mPackagesBackupUtil.backupIconsAndLabels(dstDir = mConfigsDir).apply {
-                    entity.set(state = if (isSuccess) OperationState.DONE else OperationState.ERROR, log = outString)
-                    if (isSuccess) {
-                        onIconsSaved(path = mPackagesBackupUtil.getIconsAndLabelsDst(mConfigsDir), entity = entity)
+                // 先尝试拉取并解压远端最新图标目录（失败/无则为 null，退回纯本机逻辑，不阻断备份）
+                val remoteDir = runCatching { prepareRemoteIconsForMerge() }.getOrNull()
+                try {
+                    mPackagesBackupUtil.backupIconsAndLabels(dstDir = mConfigsDir, remoteIconDir = remoteDir).apply {
+                        entity.set(state = if (isSuccess) OperationState.DONE else OperationState.ERROR, log = outString)
+                        if (isSuccess) {
+                            onIconsSaved(path = mPackagesBackupUtil.getIconsAndLabelsDst(mConfigsDir), entity = entity)
+                        }
                     }
+                } finally {
+                    runCatching { remoteDir?.deleteRecursively() }
                 }
                 entity.update(progress = 1f)
             }
