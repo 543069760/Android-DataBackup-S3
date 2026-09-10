@@ -35,6 +35,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import com.xayah.core.ui.route.MainRoutes
 import com.xayah.core.model.OpType
 import com.xayah.core.util.navigateSingle
+import com.xayah.core.util.encodedURLWithSpace
 import com.xayah.core.model.Target
 import com.xayah.core.ui.component.LocalSlotScope
 import com.xayah.core.ui.component.confirm
@@ -192,7 +193,7 @@ fun ResticBackupDetailPage(
                                         viewModel.refreshLocalDatabase(backupDir)
                                         viewModel.calculateSizesForActivatedApps()
                                         val route = MainRoutes.PackagesRestoreProcessingGraph.getRoute(
-                                            cloudName = URLEncoder.encode("", "UTF-8"),
+                                            cloudName = encodedURLWithSpace,
                                             backupDir = URLEncoder.encode(backupDir, "UTF-8"),
                                             packageName = group.packageName
                                         )

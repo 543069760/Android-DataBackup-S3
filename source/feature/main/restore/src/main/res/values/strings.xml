@@ -61,4 +61,8 @@
     <string name="restore_media_file">Media Files</string>
     <string name="restore_config_file">Config Files</string>
     <string name="restore_clone_app">Cloned app</string>
+    <!-- 批量恢复多选 -->
+    <string name="restore_selected_count">Selected %1$d</string>
+    <string name="restore_next_step">Next</string>
+    <string name="processing">Processing</string>
 </resources>

@@ -2,22 +2,43 @@ package com.xayah.core.service.packages.restore
 
 import android.util.Log
 import android.content.Intent
+import com.xayah.core.data.repository.CloudRepository
 import com.xayah.core.data.repository.PackageRepository
 import com.xayah.core.data.repository.TaskRepository
 import com.xayah.core.database.dao.PackageDao
 import com.xayah.core.database.dao.TaskDao
+import com.xayah.core.datastore.readBackupDirectory
+import com.xayah.core.datastore.readFtpResticPassword
+import com.xayah.core.datastore.readResticPassword
+import com.xayah.core.datastore.readResticRepoPath
+import com.xayah.core.datastore.readS3ResticPassword
+import com.xayah.core.datastore.readWebdavResticPassword
+import com.xayah.core.model.CloudType
 import com.xayah.core.model.DataType
 import com.xayah.core.model.OpType
 import com.xayah.core.model.TaskType
+import com.xayah.core.model.database.CloudEntity
+import com.xayah.core.model.database.FTPExtra
 import com.xayah.core.model.database.PackageEntity
+import com.xayah.core.model.database.S3Extra
+import com.xayah.core.model.database.SFTPExtra
 import com.xayah.core.model.database.TaskDetailPackageEntity
 import com.xayah.core.model.database.TaskEntity
+import com.xayah.core.model.database.WebDAVExtra
+import com.xayah.core.model.restic.ResticRestoreQueueItem
+import com.xayah.core.restic.ResticRepository
+import com.xayah.core.restic.ResticRepositoryCos
+import com.xayah.core.restic.ResticRepositoryFtp
+import com.xayah.core.restic.ResticRepositorySftp
+import com.xayah.core.restic.ResticRepositoryWebdav
 import com.xayah.core.rootservice.service.RemoteRootService
 import com.xayah.core.service.util.CommonBackupUtil
 import com.xayah.core.service.util.PackagesRestoreUtil
 import com.xayah.core.util.PathUtil
 import com.xayah.core.util.localBackupSaveDir
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
 import javax.inject.Inject
 import java.io.File
 
@@ -26,6 +47,10 @@ internal class RestoreServiceLocalImpl @Inject constructor() : AbstractRestoreSe
     override val mTAG: String = "RestoreServiceLocalImpl"
 
     private var mTargetPackageName: String = ""
+
+    // 批量恢复队列（含 CONFIG 与重型项）；空表示旧单包路径
+    private var mRestoreQueue: List<ResticRestoreQueueItem> = emptyList()
+    private var mRestoreQueueMap: Map<Pair<String, Int>, List<ResticRestoreQueueItem>> = emptyMap()
 
     @Inject
     override lateinit var mRootService: RemoteRootService
@@ -41,6 +66,25 @@ internal class RestoreServiceLocalImpl @Inject constructor() : AbstractRestoreSe
 
     @Inject
     override lateinit var mTaskRepo: TaskRepository
+
+    // 本地 + 云端 restic 仓库（均在 core:restic，core:service 已依赖）
+    @Inject
+    lateinit var mResticRepo: ResticRepository
+
+    @Inject
+    lateinit var mResticRepoFtp: ResticRepositoryFtp
+
+    @Inject
+    lateinit var mResticRepoWebdav: ResticRepositoryWebdav
+
+    @Inject
+    lateinit var mResticRepoSftp: ResticRepositorySftp
+
+    @Inject
+    lateinit var mResticRepoCos: ResticRepositoryCos
+
+    @Inject
+    lateinit var mCloudRepo: CloudRepository
 
     override val mTaskEntity by lazy {
         TaskEntity(
@@ -66,48 +110,103 @@ internal class RestoreServiceLocalImpl @Inject constructor() : AbstractRestoreSe
         mTargetPackageName = intent?.getStringExtra("TARGET_PACKAGE_NAME") ?: ""
         Log.d(mTAG, "=== 服务启动命令接收 ===")
         Log.d(mTAG, "目标包名: $mTargetPackageName")
-        Log.d(mTAG, "Intent: $intent")
-        Log.d(mTAG, "Flags: $flags, StartId: $startId")
 
-        // 检查restore目录
+        // 读取批量恢复队列临时文件（缺失/异常置空，兼容旧单包路径）
+        try {
+            val queueFile = File(mContext.cacheDir, RESTORE_QUEUE_FILE)
+            if (queueFile.exists()) {
+                mRestoreQueue = QUEUE_JSON.decodeFromString<List<ResticRestoreQueueItem>>(queueFile.readText())
+                mRestoreQueueMap = mRestoreQueue.groupBy { it.packageName to it.userId }
+                Log.d(mTAG, "读取批量恢复队列成功，共 ${mRestoreQueue.size} 条，分组 ${mRestoreQueueMap.size} 个包")
+            } else {
+                mRestoreQueue = emptyList()
+                mRestoreQueueMap = emptyMap()
+                Log.d(mTAG, "无批量恢复队列文件，走旧单包路径")
+            }
+        } catch (e: Exception) {
+            Log.e(mTAG, "读取批量恢复队列失败，置空: ${e.message}", e)
+            mRestoreQueue = emptyList()
+            mRestoreQueueMap = emptyMap()
+        }
+
         val restoreDir = File("${mRootDir}/restore")
-        Log.d(mTAG, "检查restore目录: ${restoreDir.path}")
         Log.d(mTAG, "restore目录存在: ${restoreDir.exists()}")
 
         return super.onStartCommand(intent, flags, startId)
     }
 
+    /**
+     * 全融合第一步：初始化阶段（getPackages 之前）取回每个包的 CONFIG，
+     * 解到 /restore/apps/{pkg}/user_{userId}/，随后读 json→upsert PackageEntity
+     * (opType=RESTORE, backupDir=.../restore/, activated=true)，
+     * 使后续 getPackages() 的 queryActivated 能查到批量选中的所有包。
+     */
+    override suspend fun onPrepareEntities() {
+        if (mRestoreQueue.isEmpty()) {
+            Log.d(mTAG, "队列为空，跳过 onPrepareEntities（旧单包路径由既有流程处理）")
+            return
+        }
+
+        // 只取每个 (pkg,userId) 的 CONFIG 项
+        val configItems = mRestoreQueue.filter { it.dataType == DataType.PACKAGE_CONFIG }
+        Log.d(mTAG, "onPrepareEntities: 取回 config 项 ${configItems.size} 个")
+
+        for (item in configItems) {
+            val targetPath = transitDirOf(item.packageName, item.userId)
+            val snapshotSubPath = snapshotSubPathOf(item.packageName, item.userId)
+            val ok = extractOne(
+                item = item,
+                includePath = "package_restore_config.json",
+                targetPath = targetPath,
+                snapshotSubPath = snapshotSubPath
+            )
+            if (!ok) {
+                Log.e(mTAG, "config 取回失败: ${item.packageName}/user_${item.userId}")
+                continue
+            }
+            activatePackageFromConfig(item.packageName, item.userId, targetPath)
+        }
+    }
+
+    /**
+     * 每个包写回前：解出该包的重型 tar（非 CONFIG 项）到中转目录。
+     */
+    override suspend fun onBeforeRestorePackage(p: PackageEntity, t: TaskDetailPackageEntity, userId: Int) {
+        val items = mRestoreQueueMap[p.packageName to userId]?.filter { it.dataType != DataType.PACKAGE_CONFIG }
+            ?: emptyList()
+        if (items.isEmpty()) {
+            Log.d(mTAG, "onBeforeRestorePackage: 队列无重型项，跳过 ${p.packageName}/user_$userId")
+            return
+        }
+        val targetPath = transitDirOf(p.packageName, userId)
+        val snapshotSubPath = snapshotSubPathOf(p.packageName, userId)
+        for (item in items) {
+            Log.d(mTAG, "解出重型 tar: ${p.packageName}/user_$userId ${item.dataType.type}")
+            val ok = extractOne(
+                item = item,
+                includePath = "${item.dataType.type}.tar",
+                targetPath = targetPath,
+                snapshotSubPath = snapshotSubPath
+            )
+            if (!ok) Log.e(mTAG, "重型解出失败: ${p.packageName} ${item.dataType.type}（后续 restore 会因缺 tar 失败并 fail-fast）")
+        }
+    }
+
     override suspend fun getPackages(): List<PackageEntity> {
         Log.d(mTAG, "=== 开始获取恢复包列表 ===")
 
-        // 检查是否为 Restic 恢复场景
         val restoreDir = File("${mRootDir}/restore")
-        val backupDir = if (restoreDir.exists()) {
-            Log.d(mTAG, "检测到 Restic 恢复场景，使用 restore 子目录")
-            "${mRootDir}/restore/"
-        } else {
-            Log.d(mTAG, "使用标准恢复路径")
-            mRootDir
-        }
+        val backupDir = if (restoreDir.exists()) "${mRootDir}/restore/" else mRootDir
 
-        Log.d(mTAG, "查询参数: cloud=, backupDir=$backupDir")
         val allPackages = mPackageRepo.queryActivated(OpType.RESTORE, "", backupDir)
         Log.d(mTAG, "查询到总应用数: ${allPackages.size}")
 
-        // 使用传递的包名进行筛选
         val packages = if (mTargetPackageName.isNotEmpty()) {
-            Log.d(mTAG, "筛选目标包名: $mTargetPackageName")
             allPackages.filter { it.packageName == mTargetPackageName }
         } else {
-            Log.d(mTAG, "无包名筛选，返回所有应用")
             allPackages
         }
-
         Log.d(mTAG, "筛选后查询到 ${packages.size} 个应用")
-        packages.forEach { pkg ->
-            Log.d(mTAG, "应用: ${pkg.packageName}, 用户: ${pkg.userId}, 激活: ${pkg.extraInfo.activated}")
-        }
-
         return packages
     }
 
@@ -121,17 +220,161 @@ internal class RestoreServiceLocalImpl @Inject constructor() : AbstractRestoreSe
         t.update(processingIndex = t.processingIndex + 1)
     }
 
-    override suspend fun clear() {
-        if (mTaskEntity.failureCount != 0) {
-            Log.d(mTAG, "存在失败项(failureCount=${mTaskEntity.failureCount})，保留中转目录用于排查/重试，跳过清理")
-            return
+    override suspend fun onAfterRestorePackage(p: PackageEntity, userId: Int, success: Boolean) {
+        val transitDir = transitDirOf(p.packageName, userId)
+        if (File(transitDir).exists()) {
+            Log.d(mTAG, "逐包清理中转目录(success=$success): $transitDir")
+            mRootService.deleteRecursively(transitDir)
+        } else {
+            Log.d(mTAG, "中转目录不存在，跳过: $transitDir")
         }
+    }
+
+    override suspend fun clear() {
         val restoreAppsDir = "${mRootDir}/restore/apps"
         if (File(restoreAppsDir).exists()) {
-            Log.d(mTAG, "清理临时恢复目录: $restoreAppsDir")
+            Log.d(mTAG, "整体清理临时恢复目录: $restoreAppsDir")
             mRootService.deleteRecursively(restoreAppsDir)
-        } else {
-            Log.d(mTAG, "临时恢复目录不存在，跳过清理: $restoreAppsDir")
+        }
+        val queueFile = File(mContext.cacheDir, RESTORE_QUEUE_FILE)
+        if (queueFile.exists()) {
+            Log.d(mTAG, "删除批量恢复队列文件: ${queueFile.path}")
+            queueFile.delete()
+        }
+    }
+
+    // ---------- 私有工具 ----------
+
+    /** 中转目录唯一拼法（末尾带 /，供 activatePackageFromConfig 直接拼接文件名） */
+    private fun transitDirOf(pkg: String, userId: Int): String =
+        "${mRootDir}/restore/apps/$pkg/user_$userId/"
+
+    private suspend fun snapshotSubPathOf(pkg: String, userId: Int): String {
+        // 必须与 ResticRestoreViewModel.restoreFromResticSnapshots 的 backupBaseDir 计算完全一致
+        val backupBaseDir = mContext.readBackupDirectory() ?: mContext.localBackupSaveDir()
+        return "$backupBaseDir/apps/$pkg/user_$userId"
+    }
+
+    /** 原样搬 CloudFilesRestoreViewModel.resolveResticPassword 的 when(CloudType) 分派 */
+    private suspend fun resolveCloudPassword(cloudEntity: CloudEntity): String? {
+        return when (cloudEntity.type) {
+            CloudType.FTP -> {
+                val extra = runCatching { QUEUE_JSON.decodeFromString<FTPExtra>(cloudEntity.extra) }.getOrNull()
+                extra?.resticPassword?.takeIf { it.isNotEmpty() } ?: mContext.readFtpResticPassword()
+            }
+            CloudType.WEBDAV -> {
+                val extra = runCatching { QUEUE_JSON.decodeFromString<WebDAVExtra>(cloudEntity.extra) }.getOrNull()
+                extra?.resticPassword?.takeIf { it.isNotEmpty() } ?: mContext.readWebdavResticPassword()
+            }
+            CloudType.SFTP -> {
+                val extra = runCatching { QUEUE_JSON.decodeFromString<SFTPExtra>(cloudEntity.extra) }.getOrNull()
+                extra?.resticPassword?.takeIf { it.isNotEmpty() }
+            }
+            else -> {
+                val extra = runCatching { QUEUE_JSON.decodeFromString<S3Extra>(cloudEntity.extra) }.getOrNull()
+                extra?.resticPassword?.takeIf { it.isNotEmpty() } ?: mContext.readS3ResticPassword()
+            }
+        }
+    }
+
+    /**
+     * 本地/云端分派解出：accountName 空→本地 restoreSnapshot；非空→按 CloudType 分派云端。
+     * progressCallback 预留（下载进度接线属后续步骤），默认 null。
+     */
+    private suspend fun extractOne(
+        item: ResticRestoreQueueItem,
+        includePath: String,
+        targetPath: String,
+        snapshotSubPath: String,
+        progressCallback: ResticRepository.ResticProgressCallback? = null
+    ): Boolean {
+        return try {
+            if (item.accountName.isEmpty()) {
+                // 本地
+                val repoPath = mContext.readResticRepoPath()
+                val password = mContext.readResticPassword()
+                if (repoPath.isNullOrEmpty() || password.isNullOrEmpty()) {
+                    Log.e(mTAG, "本地 restic 配置不完整，无法解出")
+                    return false
+                }
+                mResticRepo.restoreSnapshot(
+                    repoPath = repoPath,
+                    password = password,
+                    snapshotId = item.snapshotId,
+                    targetPath = targetPath,
+                    snapshotSubPath = snapshotSubPath,
+                    includePath = includePath,
+                    progressCallback = progressCallback
+                )
+            } else {
+                // 云端：用明文账户名查库
+                val cloudEntity = mCloudRepo.queryByName(item.accountName)
+                if (cloudEntity == null) {
+                    Log.e(mTAG, "云端账户未找到: ${item.accountName}")
+                    return false
+                }
+                val password = resolveCloudPassword(cloudEntity)
+                if (password.isNullOrEmpty()) {
+                    Log.e(mTAG, "云端 restic 密码解析失败: ${item.accountName}")
+                    return false
+                }
+                when (cloudEntity.type) {
+                    CloudType.FTP -> mResticRepoFtp.restoreSnapshotFromFtp(
+                        cloudEntity = cloudEntity, password = password, snapshotId = item.snapshotId,
+                        targetPath = targetPath, snapshotSubPath = snapshotSubPath,
+                        includePath = includePath, progressCallback = progressCallback
+                    )
+                    CloudType.WEBDAV -> mResticRepoWebdav.restoreSnapshotFromWebdav(
+                        cloudEntity = cloudEntity, password = password, snapshotId = item.snapshotId,
+                        targetPath = targetPath, snapshotSubPath = snapshotSubPath,
+                        includePath = includePath, progressCallback = progressCallback
+                    )
+                    CloudType.SFTP -> mResticRepoSftp.restoreSnapshotFromSftp(
+                        cloudEntity = cloudEntity, password = password, snapshotId = item.snapshotId,
+                        targetPath = targetPath, snapshotSubPath = snapshotSubPath,
+                        includePath = includePath, progressCallback = progressCallback
+                    )
+                    else -> mResticRepoCos.restoreSnapshotFromCos(
+                        cloudEntity = cloudEntity, password = password, snapshotId = item.snapshotId,
+                        targetPath = targetPath, snapshotSubPath = snapshotSubPath,
+                        includePath = includePath, progressCallback = progressCallback
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(mTAG, "extractOne 异常: ${e.message}", e)
+            false
+        }
+    }
+
+    /**
+     * 读取已解出的 config→upsert PackageEntity 并激活，逻辑对齐
+     * ResticRestoreViewModel.readPackageConfig + updateDatabase。
+     */
+    private suspend fun activatePackageFromConfig(pkg: String, userId: Int, targetPath: String) {
+        try {
+            val configPath = "${targetPath}package_restore_config.json"
+            val entity = mRootService.readJson<PackageEntity>(configPath) ?: run {
+                Log.e(mTAG, "config 读取为空: $configPath")
+                return
+            }
+            val existingId = mPackageDao.query(pkg, OpType.RESTORE, userId)?.id ?: 0L
+
+            val toUpsert = entity.copy(
+                id = existingId,
+                indexInfo = entity.indexInfo.copy(
+                    opType = OpType.RESTORE,
+                    packageName = pkg,
+                    userId = userId,
+                    cloud = "",
+                    backupDir = "${mRootDir}/restore/"
+                ),
+                extraInfo = entity.extraInfo.copy(activated = true)
+            )
+            mPackageDao.upsert(toUpsert)
+            Log.d(mTAG, "config→DB 已激活: $pkg/user_$userId (id=$existingId, ${if (existingId == 0L) "INSERT" else "UPDATE"})")
+        } catch (e: Exception) {
+            Log.e(mTAG, "activatePackageFromConfig 失败: $pkg/user_$userId - ${e.message}", e)
         }
     }
 
@@ -147,4 +390,9 @@ internal class RestoreServiceLocalImpl @Inject constructor() : AbstractRestoreSe
     override val mRootDir by lazy { mContext.localBackupSaveDir() }
     override val mAppsDir by lazy { mPathUtil.getLocalBackupAppsDir() }
     override val mConfigsDir by lazy { mPathUtil.getLocalBackupConfigsDir() }
+
+    companion object {
+        private const val RESTORE_QUEUE_FILE = "restic_restore_queue.json"
+        private val QUEUE_JSON = Json { ignoreUnknownKeys = true }
+    }
 }

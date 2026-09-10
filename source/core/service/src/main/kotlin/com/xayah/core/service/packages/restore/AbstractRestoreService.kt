@@ -17,6 +17,7 @@ import com.xayah.core.model.database.Info
 import com.xayah.core.model.database.PackageEntity
 import com.xayah.core.model.database.ProcessingInfoEntity
 import com.xayah.core.model.database.TaskDetailPackageEntity
+import com.xayah.core.model.util.get
 import com.xayah.core.service.R
 import com.xayah.core.service.packages.AbstractPackagesService
 import com.xayah.core.service.util.PackagesRestoreUtil
@@ -55,6 +56,9 @@ internal abstract class AbstractRestoreService : AbstractPackagesService() {
 
     @SuppressLint("StringFormatInvalid")
     override suspend fun onInitializing() {
+        // 批量恢复：在查询激活包之前先完成 config 取回与 DB 激活（默认空实现，仅批量场景覆写）
+        onPrepareEntities()
+
         val packages = getPackages()
         packages.forEach { pkg ->
             mPkgEntities.add(
@@ -82,6 +86,24 @@ internal abstract class AbstractRestoreService : AbstractPackagesService() {
     protected open suspend fun beforeSettingUpEnv() {}
     abstract suspend fun restore(type: DataType, userId: Int, p: PackageEntity, t: TaskDetailPackageEntity, srcDir: String)
     protected open suspend fun clear() {}
+
+    /**
+     * 批量恢复钩子：在查询激活包之前调用，用于取回各包 CONFIG 并写入/激活 DB。
+     * 默认空实现，仅 RestoreServiceLocalImpl 在批量 restic 场景覆写。
+     */
+    protected open suspend fun onPrepareEntities() {}
+
+    /**
+     * 批量恢复钩子：单个包写回之前调用，用于按队列从 restic 仓库解出该包的重型 tar 到中转目录。
+     * 默认空实现，仅 RestoreServiceLocalImpl 在批量 restic 场景覆写。
+     */
+    protected open suspend fun onBeforeRestorePackage(p: PackageEntity, t: TaskDetailPackageEntity, userId: Int) {}
+
+    /**
+     * 批量恢复钩子：单个包写回结束（无论成败）后调用，用于清理该包中转目录、释放空间。
+     * 默认空实现，仅 RestoreServiceLocalImpl 在批量 restic 场景覆写。
+     */
+    protected open suspend fun onAfterRestorePackage(p: PackageEntity, userId: Int, success: Boolean) {}
 
     abstract val mPackagesRestoreUtil: PackagesRestoreUtil
 
@@ -136,17 +158,36 @@ internal abstract class AbstractRestoreService : AbstractPackagesService() {
                 }
                 val srcDir = "${baseDir}/${p.archivesRelativeDir}"
                 val userId = if (restoreUser == -1) p.userId else restoreUser
-                restore(type = DataType.PACKAGE_APK, userId = userId, p = p, t = pkg, srcDir = srcDir)
-                restore(type = DataType.PACKAGE_USER, userId = userId, p = p, t = pkg, srcDir = srcDir)
-                restore(type = DataType.PACKAGE_USER_DE, userId = userId, p = p, t = pkg, srcDir = srcDir)
-                restore(type = DataType.PACKAGE_DATA, userId = userId, p = p, t = pkg, srcDir = srcDir)
-                restore(type = DataType.PACKAGE_OBB, userId = userId, p = p, t = pkg, srcDir = srcDir)
-                restore(type = DataType.PACKAGE_MEDIA, userId = userId, p = p, t = pkg, srcDir = srcDir)
-                if (mContext.readRestorePermissions().first()) {
-                    mPackagesRestoreUtil.restorePermissions(userId = userId, p = p)
+
+                // 批量恢复：先按队列从 restic 仓库解出该包的重型 tar 到中转目录（默认空实现）
+                onBeforeRestorePackage(p, pkg, userId)
+
+                // App 维度 fail-fast：任一 dataType 失败即跳过该 App 剩余步骤
+                var failedFast = false
+                val dataTypes = listOf(
+                    DataType.PACKAGE_APK,
+                    DataType.PACKAGE_USER,
+                    DataType.PACKAGE_USER_DE,
+                    DataType.PACKAGE_DATA,
+                    DataType.PACKAGE_OBB,
+                    DataType.PACKAGE_MEDIA,
+                )
+                for (type in dataTypes) {
+                    restore(type = type, userId = userId, p = p, t = pkg, srcDir = srcDir)
+                    if (pkg.get(type).state == OperationState.ERROR) {
+                        log { "Fail-fast: ${p.packageName} 在 ${type.type} 步骤失败，跳过该 App 剩余恢复步骤。" }
+                        failedFast = true
+                        break
+                    }
                 }
-                if (mContext.readRestoreSsaid().first()) {
-                    mPackagesRestoreUtil.restoreSsaid(userId = userId, p = p)
+
+                if (!failedFast) {
+                    if (mContext.readRestorePermissions().first()) {
+                        mPackagesRestoreUtil.restorePermissions(userId = userId, p = p)
+                    }
+                    if (mContext.readRestoreSsaid().first()) {
+                        mPackagesRestoreUtil.restoreSsaid(userId = userId, p = p)
+                    }
                 }
 
                 if (pkg.isSuccess) {
@@ -156,6 +197,9 @@ internal abstract class AbstractRestoreService : AbstractPackagesService() {
                     mTaskEntity.update(failureCount = mTaskEntity.failureCount + 1)
                 }
                 pkg.update(state = if (pkg.isSuccess) OperationState.DONE else OperationState.ERROR)
+
+                // 批量恢复：无论成败都清理该包中转目录，避免脏数据影响下次恢复（默认空实现）
+                onAfterRestorePackage(p, userId, pkg.isSuccess)
             }
             mTaskEntity.update(processingIndex = mTaskEntity.processingIndex + 1)
         }

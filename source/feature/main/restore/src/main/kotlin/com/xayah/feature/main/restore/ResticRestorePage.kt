@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -19,6 +20,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -32,6 +38,8 @@ import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.BorderStroke
@@ -41,20 +49,21 @@ import com.xayah.core.model.DataType
 import com.xayah.core.ui.component.PackageIconImage
 import com.xayah.core.model.restic.ResticBackupApp
 import com.xayah.core.ui.theme.ThemedColorSchemeKeyTokens
-import com.xayah.core.ui.theme.value  // 添加这个导入
+import com.xayah.core.ui.theme.value
 import com.xayah.feature.main.restore.ResticBackupGroup
 import com.xayah.feature.main.restore.R
 import android.content.Context
-import androidx.compose.runtime.remember
 import com.xayah.core.ui.component.BodyMediumText
 import com.xayah.core.ui.component.TitleLargeText
 import com.xayah.core.ui.route.MainRoutes
 import com.xayah.core.ui.token.SizeTokens
 import com.xayah.core.util.DateUtil
+import com.xayah.core.util.encodedURLWithSpace
 import com.xayah.core.util.navigateSingle
 import com.xayah.core.model.OpType
 import com.xayah.core.model.Target
 import androidx.compose.foundation.ExperimentalFoundationApi
+import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.Serializable
@@ -68,6 +77,29 @@ fun ResticRestorePage(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val iconVersion by viewModel.iconVersion.collectAsStateWithLifecycle()
+    val coroutineScope = rememberCoroutineScope()
+
+    // 多选态：是否处于选择模式 + 已选 group 的 key 集合
+    var selectionMode by remember { mutableStateOf(false) }
+    val selectedKeys = remember { mutableStateListOf<String>() }
+    var isPreparing by remember { mutableStateOf(false) }
+
+    fun groupKey(g: ResticBackupGroup): String = "${g.userId}-${g.packageName}-${g.timestamp}"
+
+    // 互斥选择：勾选某版本前，先剔除已选集合里同一 (packageName, userId) 的其它版本，再加入当前 key
+    // 务必同时比较 packageName 与 userId，避免误伤分身(userId != 0)
+    fun selectExclusive(g: ResticBackupGroup) {
+        val key = groupKey(g)
+        // 剔除同一 (packageName, userId) 的其它已选版本（同 packageName 同 userId 但不同 timestamp）
+        val prefix = "${g.userId}-${g.packageName}-"
+        selectedKeys.removeAll { it.startsWith(prefix) && it != key }
+        if (!selectedKeys.contains(key)) selectedKeys.add(key)
+    }
+
+    fun exitSelection() {
+        selectionMode = false
+        selectedKeys.clear()
+    }
 
     LaunchedEffect(Unit) {
         viewModel.loadBackedUpApps()      // 首次/正常进入：守卫生效，秒开
@@ -82,6 +114,7 @@ fun ResticRestorePage(
     LaunchedEffect(needsRefresh?.value) {
         if (needsRefresh?.value == true) {
             viewModel.forceReload()       // 绕过守卫，重列 + 重建缓存
+            exitSelection()               // 列表刷新后清空多选态，避免残留脏选择
             navController.currentBackStackEntry
                 ?.savedStateHandle
                 ?.set("restic_needs_refresh", false)  // 复位，避免重复触发
@@ -90,7 +123,10 @@ fun ResticRestorePage(
 
     RestoreScaffold(
         scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(rememberTopAppBarState()),
-        title = stringResource(R.string.restore_restic_restore_title)
+        title = if (selectionMode)
+            stringResource(R.string.restore_selected_count, selectedKeys.size)
+        else
+            stringResource(R.string.restore_restic_restore_title)
     ) {
         Column(
             modifier = Modifier
@@ -119,6 +155,7 @@ fun ResticRestorePage(
                         }
                     } else {
                         LazyColumn(
+                            modifier = Modifier.weight(1f),
                             verticalArrangement = Arrangement.spacedBy(SizeTokens.Level8)
                         ) {
                             // 修正后的 items 调用
@@ -126,25 +163,93 @@ fun ResticRestorePage(
                                 currentState.groups,
                                 key = { item: ResticBackupGroup -> "${item.userId}-${item.packageName}-${item.timestamp}" }
                             ) { group: ResticBackupGroup ->
+                                val key = groupKey(group)
+                                val selectable = group.backups.any { it.dataType == DataType.PACKAGE_CONFIG }
                                 ResticBackupGroupItem(
                                     group = group,
+                                    selectionMode = selectionMode,
+                                    selectable = selectable,
+                                    selected = selectedKeys.contains(key),
+                                    onSelectedChange = { checked ->
+                                        // 仅可选（含 config）的分组可切换
+                                        if (!selectable) return@ResticBackupGroupItem
+                                        if (checked) {
+                                            // 互斥：同一 (packageName, userId) 只保留当前版本
+                                            selectExclusive(group)
+                                        } else {
+                                            selectedKeys.remove(key)
+                                        }
+                                    },
+                                    onLongClick = {
+                                        // 长按进入多选模式并选中当前项（若可选）
+                                        if (!selectionMode) {
+                                            selectionMode = true
+                                        }
+                                        if (selectable) {
+                                            selectExclusive(group)
+                                        }
+                                    },
                                     onClick = {
-                                        // 1. JSON 序列化
-                                        val groupJson = Json.encodeToString(group)
-                                        Log.d("ResticRestorePage", "Navigating with groupJson: $groupJson")
-
-                                        // 2. URL 编码，并构造完整的路由
-                                        val encodedJson = URLEncoder.encode(groupJson, "UTF-8")
-                                        val url = MainRoutes.ResticBackupDetail.getRoute(groupJsonEncoded = encodedJson)
-
-                                        Log.d("ResticRestorePage", "Full URL: $url")
-
-                                        // 3. 执行导航
-                                        navController.navigateSingle(url)
+                                        if (selectionMode) {
+                                            // 多选态：点击切换勾选
+                                            if (!selectable) return@ResticBackupGroupItem
+                                            if (selectedKeys.contains(key)) selectedKeys.remove(key)
+                                            else selectExclusive(group)
+                                        } else {
+                                            // 非多选态：保持原有单包导航详情页
+                                            val groupJson = Json.encodeToString(group)
+                                            Log.d("ResticRestorePage", "Navigating with groupJson: $groupJson")
+                                            val encodedJson = URLEncoder.encode(groupJson, "UTF-8")
+                                            val url = MainRoutes.ResticBackupDetail.getRoute(groupJsonEncoded = encodedJson)
+                                            Log.d("ResticRestorePage", "Full URL: $url")
+                                            navController.navigateSingle(url)
+                                        }
                                     },
                                     context = LocalContext.current,
                                     accountId = "local",
                                     iconVersion = iconVersion            // 新增：透传图标版本
+                                )
+                            }
+                        }
+
+                        // 多选态底部“下一步”按钮：仅当已选非空时可用
+                        if (selectionMode) {
+                            Button(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = SizeTokens.Level8),
+                                enabled = selectedKeys.isNotEmpty() && !isPreparing,
+                                onClick = {
+                                    val selectedGroups = currentState.groups.filter { selectedKeys.contains(groupKey(it)) }
+                                    if (selectedGroups.isEmpty()) return@Button
+                                    isPreparing = true
+                                    coroutineScope.launch {
+                                        try {
+                                            // 仅写队列 + 解 config + 刷 DB（重型 tar 交给服务层解出）
+                                            val success = viewModel.prepareBatchRestore(selectedGroups)
+                                            if (success) {
+                                                val backupDir = "${viewModel.readBackupDirectory()}/restore/"
+                                                val route = MainRoutes.PackagesRestoreProcessingGraph.getRoute(
+                                                    cloudName = encodedURLWithSpace,
+                                                    backupDir = URLEncoder.encode(backupDir, "UTF-8"),
+                                                    packageName = ""
+                                                )
+                                                exitSelection()
+                                                navController.navigateSingle(route)
+                                            } else {
+                                                Log.e("ResticRestorePage", "prepareBatchRestore 返回 false，无可恢复项")
+                                            }
+                                        } catch (e: Exception) {
+                                            Log.e("ResticRestorePage", "批量恢复准备异常: ${e.message}", e)
+                                        } finally {
+                                            isPreparing = false
+                                        }
+                                    }
+                                }
+                            ) {
+                                Text(
+                                    if (isPreparing) stringResource(R.string.processing)
+                                    else stringResource(R.string.restore_next_step)
                                 )
                             }
                         }
@@ -173,14 +278,19 @@ fun ResticRestorePage(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun ResticBackupGroupItem(
     group: ResticBackupGroup,
     onClick: () -> Unit,
     context: Context,
     accountId: String? = null,
-    iconVersion: Int = 0                 // 新增：默认 0，兼容其它调用点
+    iconVersion: Int = 0,                // 新增：默认 0，兼容其它调用点
+    selectionMode: Boolean = false,      // 新增：是否多选态
+    selectable: Boolean = true,          // 新增：是否可勾选（无 config 则不可）
+    selected: Boolean = false,           // 新增：当前是否已选
+    onSelectedChange: (Boolean) -> Unit = {},  // 新增：勾选切换回调
+    onLongClick: () -> Unit = {}         // 新增：长按进入多选
 ) {
     val hasConfigSnapshot = group.backups.any { it.dataType == DataType.PACKAGE_CONFIG }
 
@@ -189,7 +299,14 @@ fun ResticBackupGroupItem(
     val contentColor = Color(0xFFD32F2F)
     val borderColor = Color(0xFFFFCCC7).copy(alpha = 0.5f)
 
-    Surface(onClick = onClick) {
+    Surface(
+        modifier = Modifier.combinedClickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null,
+            onLongClick = onLongClick,
+            onClick = onClick
+        )
+    ) {
         Row(
             modifier = Modifier
                 .height(IntrinsicSize.Min)
@@ -197,6 +314,17 @@ fun ResticBackupGroupItem(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(SizeTokens.Level16)
         ) {
+            // 多选态下显示复选框；!selectable（无 config）时置灰不可勾选
+            if (selectionMode) {
+                Checkbox(
+                    checked = selected && selectable,
+                    onCheckedChange = { checked ->
+                        if (selectable) onSelectedChange(checked)
+                    },
+                    enabled = selectable
+                )
+            }
+
             PackageIconImage(
                 packageName = group.packageName,
                 size = SizeTokens.Level32,

@@ -53,4 +53,8 @@
     <string name="restore_media_file">媒体文件</string>
     <string name="restore_config_file">配置文件</string>
     <string name="restore_clone_app">应用分身</string>
+    <!-- 批量恢复多选 -->
+    <string name="restore_selected_count">已选 %1$d 个</string>
+    <string name="restore_next_step">下一步</string>
+    <string name="processing">处理中</string>
 </resources>

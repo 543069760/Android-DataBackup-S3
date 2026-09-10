@@ -54,6 +54,7 @@ import com.xayah.core.util.localBackupSaveDir
 import com.xayah.core.util.navigateSingle
 import com.xayah.core.util.encodeAccountId
 import com.xayah.core.util.decodeURL
+import com.xayah.core.util.encodedURLWithSpace
 import kotlinx.coroutines.launch
 import java.net.URLEncoder
 
@@ -203,7 +204,7 @@ fun CloudBackupDetailPage(
                                         viewModel.calculateSizesForActivatedApps()
 
                                         val route = MainRoutes.PackagesRestoreProcessingGraph.getRoute(
-                                            cloudName = URLEncoder.encode("", "UTF-8"),
+                                            cloudName = encodedURLWithSpace,
                                             backupDir = URLEncoder.encode(backupDir, "UTF-8"),
                                             packageName = group.packageName
                                         )

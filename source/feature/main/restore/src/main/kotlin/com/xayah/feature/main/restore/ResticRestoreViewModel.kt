@@ -10,6 +10,7 @@ import com.xayah.core.datastore.readResticRepoPath
 import com.xayah.core.model.DataType
 import com.xayah.core.model.ResticProgressState
 import com.xayah.core.model.restic.ResticBackupApp
+import com.xayah.core.model.restic.ResticRestoreQueueItem
 import com.xayah.core.restic.ResticRepository
 import com.xayah.core.restic.ResticShared
 import com.xayah.core.util.DateUtil
@@ -39,6 +40,7 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import javax.inject.Inject
@@ -56,6 +58,7 @@ class ResticRestoreViewModel @Inject constructor(
 
     companion object {
         private const val TAG = "ResticRestore"
+        const val RESTORE_QUEUE_FILE = "restic_restore_queue.json"
     }
 
     // 速度跟踪变量 - 添加到这里
@@ -74,6 +77,109 @@ class ResticRestoreViewModel @Inject constructor(
     val resticProgress: StateFlow<ResticProgressState> = _resticProgress.asStateFlow()
 
     private val startTime = System.currentTimeMillis()
+
+    /**
+     * 批量恢复准备（本地 restic，方案乙）：
+     * 1) 逐包只解出 CONFIG 到 /restore/apps/{pkg}/user_{userId}/；
+     * 2) 某个包 config 解出失败/校验失败 → 只跳过该包（不入队、不激活），不影响其余包；
+     * 3) 用"成功解出 config 的包"写队列 + refreshLocalDatabase 激活 + 计算大小；
+     * 4) 仅当所有包都失败时才返回 false。
+     */
+    suspend fun prepareBatchRestore(groups: List<ResticBackupGroup>): Boolean = withContext(Dispatchers.IO) {
+        try {
+            if (groups.isEmpty()) {
+                Log.w(TAG, "prepareBatchRestore: 选中 groups 为空")
+                return@withContext false
+            }
+            val repoPath = context.readResticRepoPath()
+            val password = context.readResticPassword()
+            if (repoPath.isNullOrEmpty() || password.isNullOrEmpty()) {
+                Log.e(TAG, "prepareBatchRestore: restic 未配置（repoPath/password 为空）")
+                return@withContext false
+            }
+
+            val backupBaseDir = context.readBackupDirectory() ?: context.localBackupSaveDir()
+            val targetBasePath = "${context.localBackupSaveDir()}/restore/"
+
+            //新增：本次准备前先清空磁盘上的 restore/apps，避免上次退回列表后残留的 config 被 refreshLocalDatabase 误扫导致累加
+            val appsDirToClear = File("${targetBasePath}apps")
+            if (appsDirToClear.exists()) {
+                Log.d(TAG, "prepareBatchRestore: 清空旧的中转目录 ${appsDirToClear.path}")
+                runCatching { appsDirToClear.deleteRecursively() }
+                    .onFailure { Log.e(TAG, "prepareBatchRestore: 清空 restore/apps 失败", it) }
+            }
+
+            val succeededGroups = mutableListOf<ResticBackupGroup>()
+            val failedPackages = mutableListOf<String>()
+
+            // 逐包解 config：失败只跳过当前包，继续下一个
+            for (group in groups) {
+                val configBackup = group.backups.firstOrNull { it.dataType == DataType.PACKAGE_CONFIG }
+                if (configBackup == null) {
+                    Log.e(TAG, "prepareBatchRestore: 包 ${group.packageName}(user_${group.userId}) 无 CONFIG 快照，跳过")
+                    failedPackages.add("${group.packageName}/user_${group.userId}")
+                    continue
+                }
+
+                val snapshotSubPath = "$backupBaseDir/apps/${group.packageName}/user_${group.userId}"
+                val fullTargetPath = "${targetBasePath}apps/${group.packageName}/user_${group.userId}/"
+
+                val ok = runCatching {
+                    resticRepo.restoreSnapshot(
+                        repoPath = repoPath,
+                        password = password,
+                        snapshotId = configBackup.snapshotId,
+                        targetPath = fullTargetPath,
+                        includePath = "package_restore_config.json",
+                        snapshotSubPath = snapshotSubPath
+                    )
+                }.getOrElse {
+                    Log.e(TAG, "prepareBatchRestore: 包 ${group.packageName} config 解出异常", it)
+                    false
+                }
+
+                // 校验 config 文件确实落盘
+                val configFile = File(fullTargetPath, "package_restore_config.json")
+                if (!ok || !configFile.exists()) {
+                    Log.e(TAG, "prepareBatchRestore: 包 ${group.packageName}(user_${group.userId}) config 解出/校验失败，跳过该包")
+                    // 清理该包残留，避免脏数据被 refreshLocalDatabase 误扫
+                    runCatching { File("${targetBasePath}apps/${group.packageName}/user_${group.userId}").deleteRecursively() }
+                    failedPackages.add("${group.packageName}/user_${group.userId}")
+                    continue
+                }
+
+                succeededGroups.add(group)
+            }
+
+            // 全部失败才算整批失败
+            if (succeededGroups.isEmpty()) {
+                Log.e(TAG, "prepareBatchRestore: 所有包 config 解出失败，无可恢复项")
+                return@withContext false
+            }
+
+            // 仅用成功的包写队列（含 CONFIG 与重型，重型仍交给服务解出）
+            val queue = succeededGroups.flatMap { it.backups }.map { backup ->
+                ResticRestoreQueueItem(
+                    packageName = backup.packageName,
+                    userId = backup.userId,
+                    dataType = backup.dataType,
+                    snapshotId = backup.snapshotId,
+                    accountName = ""   // 本地：空串
+                )
+            }
+            File(context.cacheDir, RESTORE_QUEUE_FILE).writeText(Json.encodeToString(queue))
+
+            // 刷 DB（内部会先删旧 RESTORE 记录，再扫已落盘的 config 并激活）+ 计算大小
+            refreshLocalDatabase(targetBasePath)
+            calculateSizesForActivatedApps()
+
+            Log.d(TAG, "prepareBatchRestore: 准备完成，成功 ${succeededGroups.size} 个，跳过 ${failedPackages.size} 个：$failedPackages")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "prepareBatchRestore 失败: ${e.message}", e)
+            false
+        }
+    }
 
     fun loadBackedUpApps(force: Boolean = false) {
         // 守卫：非强制且已加载且当前已是 Success，直接复用，不重跑（连后台刷新都省掉）

@@ -40,6 +40,8 @@ import com.xayah.core.util.encodeAccountId
 import com.xayah.core.model.CompressionType
 import com.xayah.core.util.command.Tar
 import com.xayah.feature.main.restore.R
+import com.xayah.core.model.restic.ResticRestoreQueueItem
+import kotlinx.serialization.encodeToString
 import kotlinx.coroutines.flow.first
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -67,11 +69,138 @@ class CloudRestoreViewModel @Inject constructor(
     private val cloudRepo: CloudRepository
 ) : ViewModel() {
 
+    companion object {
+        const val RESTORE_QUEUE_FILE = "restic_restore_queue.json"
+        private const val TAG = "CloudRestore"
+    }
+
     private var lastBytes = 0L
     private var lastTime = System.currentTimeMillis()
     private var accountName: String = ""
     private val _uiState = MutableStateFlow<CloudRestoreUiState>(CloudRestoreUiState.Loading)
     val uiState: StateFlow<CloudRestoreUiState> = _uiState.asStateFlow()
+
+    /**
+     * 批量恢复准备（云端 restic）：逐包只解出 config 并校验，仅把通过的包写入队列 + 激活到 DB。
+     * 重型 tar 仍由服务层 onBeforeRestorePackage 解出。单个包失败只跳过该包，不影响其余包。
+     * @return 至少有一个包成功返回 true；全部失败返回 false。
+     */
+    suspend fun prepareBatchRestore(groups: List<ResticBackupGroup>): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val cloudEntity = cloudRepo.queryByName(accountName)
+            if (cloudEntity == null) {
+                Log.e(TAG, "prepareBatchRestore: 云端账户查询失败: $accountName")
+                return@withContext false
+            }
+            val password = resolveResticPassword(cloudEntity)
+            if (password.isNullOrEmpty()) {
+                Log.e(TAG, "prepareBatchRestore: restic 密码未配置")
+                return@withContext false
+            }
+
+            val targetBasePath = "${context.localBackupSaveDir()}/restore/"
+            val backupBaseDir = context.readBackupDirectory() ?: context.localBackupSaveDir()
+            val appsDir = File("${targetBasePath}apps")
+            if (appsDir.exists()) {
+                Log.d(TAG, "prepareBatchRestore: 清空上次残留中转目录: ${appsDir.path}")
+                runCatching { appsDir.deleteRecursively() }
+                    .onFailure { Log.w(TAG, "prepareBatchRestore: 清空 apps 目录失败(忽略): ${it.message}") }
+            }
+
+            val succeededGroups = mutableListOf<ResticBackupGroup>()
+            val failedPackages = mutableListOf<String>()
+
+            for (group in groups) {
+                // 只取该包的 CONFIG 快照
+                val configBackup = group.backups.firstOrNull { it.dataType == DataType.PACKAGE_CONFIG }
+                if (configBackup == null) {
+                    Log.w(TAG, "prepareBatchRestore: ${group.packageName} 无 config 快照，跳过")
+                    failedPackages.add(group.packageName)
+                    continue
+                }
+
+                val snapshotSubPath = "$backupBaseDir/apps/${group.packageName}/user_${group.userId}"
+                val fullTargetPath = "${targetBasePath}apps/${group.packageName}/user_${group.userId}/"
+
+                // 云端按 CloudType 分派解出 config（复用 restoreFromCloudSnapshots 的分派）
+                val ok = runCatching {
+                    when (cloudEntity.type) {
+                        CloudType.FTP -> resticRepoFtp.restoreSnapshotFromFtp(
+                            cloudEntity = cloudEntity, password = password,
+                            snapshotId = configBackup.snapshotId,
+                            targetPath = fullTargetPath,
+                            snapshotSubPath = snapshotSubPath,
+                            includePath = "package_restore_config.json"
+                        )
+                        CloudType.WEBDAV -> resticRepoWebdav.restoreSnapshotFromWebdav(
+                            cloudEntity = cloudEntity, password = password,
+                            snapshotId = configBackup.snapshotId,
+                            targetPath = fullTargetPath,
+                            snapshotSubPath = snapshotSubPath,
+                            includePath = "package_restore_config.json"
+                        )
+                        CloudType.SFTP -> resticRepoSftp.restoreSnapshotFromSftp(
+                            cloudEntity = cloudEntity, password = password,
+                            snapshotId = configBackup.snapshotId,
+                            targetPath = fullTargetPath,
+                            snapshotSubPath = snapshotSubPath,
+                            includePath = "package_restore_config.json"
+                        )
+                        else -> resticRepoCos.restoreSnapshotFromCos(
+                            cloudEntity = cloudEntity, password = password,
+                            snapshotId = configBackup.snapshotId,
+                            targetPath = fullTargetPath,
+                            snapshotSubPath = snapshotSubPath,
+                            includePath = "package_restore_config.json"
+                        )
+                    }
+                }.getOrElse { e ->
+                    Log.e(TAG, "prepareBatchRestore: ${group.packageName} config 解出异常: ${e.message}", e)
+                    false
+                }
+
+                // 校验落盘的 config 文件存在
+                val configExists = File(fullTargetPath, "package_restore_config.json").exists()
+                if (!ok || !configExists) {
+                    Log.e(TAG, "prepareBatchRestore: ${group.packageName} config 解出/校验失败，跳过并清理")
+                    runCatching { File(fullTargetPath).deleteRecursively() }
+                    failedPackages.add(group.packageName)
+                    continue
+                }
+
+                succeededGroups.add(group)
+            }
+
+            if (succeededGroups.isEmpty()) {
+                Log.e(TAG, "prepareBatchRestore: 无任何包通过校验")
+                return@withContext false
+            }
+
+            // 仅用通过校验的包扁平化写队列（含 CONFIG 与重型，accountName = 明文账户名）
+            val queue = succeededGroups.flatMap { group ->
+                group.backups.map { backup ->
+                    ResticRestoreQueueItem(
+                        packageName = backup.packageName,
+                        userId = backup.userId,
+                        dataType = backup.dataType,
+                        snapshotId = backup.snapshotId,
+                        accountName = cloudEntity.name   // 云端：原始明文账户名
+                    )
+                }
+            }
+            File(context.cacheDir, RESTORE_QUEUE_FILE).writeText(Json.encodeToString(queue))
+
+            // 刷 DB（内部先删旧 RESTORE 记录，再扫已落盘 config 激活）+ 计算大小
+            refreshLocalDatabase(targetBasePath)
+            calculateSizesForActivatedApps()
+
+            Log.d(TAG, "prepareBatchRestore: 准备完成，成功 ${succeededGroups.size} 个，跳过 ${failedPackages.size} 个：$failedPackages")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "prepareBatchRestore 失败: ${e.message}", e)
+            false
+        }
+    }
 
     // 图标版本信号：图标解压完成后自增，触发列表项 PackageIconImage 重新取图
     private val _iconVersion = MutableStateFlow(0)

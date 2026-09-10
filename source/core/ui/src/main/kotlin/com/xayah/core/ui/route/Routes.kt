@@ -96,8 +96,14 @@ sealed class MainRoutes(val route: String) {
 
     data object PackagesRestoreProcessing : MainRoutes(route = "main_packages_restore_processing")
     data object PackagesRestoreProcessingSetup : MainRoutes(route = "main_packages_restore_processing_setup")
-    data object PackagesRestoreProcessingGraph : MainRoutes(route = "main_packages_restore_processing_graph/{$ARG_ACCOUNT_NAME}/{$ARG_ACCOUNT_REMOTE}/{$ARG_PACKAGE_NAME_FILTER}") {
-        fun getRoute(cloudName: String = encodedURLWithSpace, backupDir: String = encodedURLWithSpace, packageName: String = encodedURLWithSpace) = "main_packages_restore_processing_graph/${cloudName}/${backupDir}/${packageName}"
+    data object PackagesRestoreProcessingGraph : MainRoutes(
+        route = "main_packages_restore_processing_graph/{$ARG_ACCOUNT_NAME}/{$ARG_ACCOUNT_REMOTE}?${ARG_PACKAGE_NAME_FILTER}={${ARG_PACKAGE_NAME_FILTER}}"
+    ) {
+        fun getRoute(
+            cloudName: String = encodedURLWithSpace,
+            backupDir: String = encodedURLWithSpace,
+            packageName: String = ""
+        ) = "main_packages_restore_processing_graph/${cloudName}/${backupDir}?${ARG_PACKAGE_NAME_FILTER}=${packageName}"
     }
 
     data object CloudFilesBackupDetail : MainRoutes(route = "main_cloud_files_backup_detail?${ARG_GROUP}={${ARG_GROUP}}&${ARG_ACCOUNT_NAME}={${ARG_ACCOUNT_NAME}}") {

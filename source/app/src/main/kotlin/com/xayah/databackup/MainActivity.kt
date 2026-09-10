@@ -155,7 +155,11 @@ class MainActivity : AppCompatActivity() {
                             arguments = listOf(
                                 navArgument(MainRoutes.ARG_ACCOUNT_NAME) { type = NavType.StringType },
                                 navArgument(MainRoutes.ARG_ACCOUNT_REMOTE) { type = NavType.StringType },
-                                navArgument(MainRoutes.ARG_PACKAGE_NAME_FILTER) { type = NavType.StringType }
+                                navArgument(MainRoutes.ARG_PACKAGE_NAME_FILTER) {
+                                    type = NavType.StringType
+                                    nullable = true
+                                    defaultValue = ""
+                                }
                             )
                         ) { backStackEntry ->
                             val cloudName = backStackEntry.arguments?.getString(MainRoutes.ARG_ACCOUNT_NAME) ?: ""
