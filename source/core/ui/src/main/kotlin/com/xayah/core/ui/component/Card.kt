@@ -39,6 +39,14 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -216,19 +224,58 @@ fun ProcessingCard(
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         items.forEachIndexed { index, item ->
+                            // M3E 进度背景：仅在该子项处理中时按 progress 从左到右填充
+                            val progressColor = MaterialTheme.colorScheme.primaryContainer
+                            val animatedProgress by animateFloatAsState(
+                                targetValue = item.progress.coerceIn(0f, 1f),
+                                animationSpec = tween(durationMillis = 300),
+                                label = "itemProgress"
+                            )
                             Surface(
                                 modifier = Modifier.fillMaxWidth(),
                                 enabled = enabled,
                                 color = ThemedColorSchemeKeyTokens.Transparent.value.withState(enabled),
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(SizeTokens.Level16),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(SizeTokens.Level8))
+                                        .drawBehind {
+                                            if (animatedProgress > 0f) {
+                                                drawRect(
+                                                    color = progressColor,
+                                                    size = Size(
+                                                        width = size.width * animatedProgress,
+                                                        height = size.height
+                                                    )
+                                                )
+                                            }
+                                        }
+                                        // 竖直 padding 从 Level16 收到 Level4，横向保持 Level16
+                                        .padding(horizontal = SizeTokens.Level16, vertical = SizeTokens.Level6),
                                     horizontalArrangement = Arrangement.spacedBy(SizeTokens.Level16),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     item.state.StateView(enabled = enabled, expanded = false, isProcessing = processingIndex == index)
-                                    TitleSmallText(modifier = Modifier.weight(1f), text = item.title, color = ThemedColorSchemeKeyTokens.OnSurfaceVariant.value.withState(enabled))
-                                    LabelSmallText(text = item.content, color = ThemedColorSchemeKeyTokens.OnSurfaceVariant.value.withState(enabled))
+                                    Column(
+                                        modifier = Modifier.weight(1f),
+                                        verticalArrangement = Arrangement.spacedBy(SizeTokens.Level6)
+                                    ) {
+                                        TitleSmallText(
+                                            text = item.title,
+                                            color = ThemedColorSchemeKeyTokens.OnSurfaceVariant.value.withState(enabled),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        if (item.content.isNotEmpty()) {
+                                            LabelSmallText(
+                                                text = item.content,
+                                                color = ThemedColorSchemeKeyTokens.OnSurfaceVariant.value.withState(enabled),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
                                     Icon(
                                         imageVector = Icons.Rounded.Circle,
                                         contentDescription = null,

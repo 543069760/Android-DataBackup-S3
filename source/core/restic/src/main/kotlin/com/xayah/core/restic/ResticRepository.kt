@@ -150,8 +150,8 @@ class ResticRepository @Inject constructor(
                             progressCallback.onRestoreProgress(
                                 0L,               // filesFinished：native 不逐文件回传
                                 planFilesTotal,
-                                readBytes,        // ← 改这里（原为 writtenBytes）
-                                planBytesTotal,   // 分母沿用 plan 统计
+                                readBytes,        // 已读回字节映射到 bytesWritten 槽
+                                if (readTotal > 0) readTotal else planBytesTotal,  // 分母优先用 readTotal，回退 plan 统计
                                 planFilesSkipped,
                                 planBytesSkipped
                             )

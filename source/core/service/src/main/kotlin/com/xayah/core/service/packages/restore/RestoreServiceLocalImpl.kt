@@ -36,6 +36,15 @@ import com.xayah.core.service.util.CommonBackupUtil
 import com.xayah.core.service.util.PackagesRestoreUtil
 import com.xayah.core.util.PathUtil
 import com.xayah.core.util.localBackupSaveDir
+import com.xayah.core.model.util.formatSize
+import com.xayah.core.model.util.formatToStorageSizePerSecond
+import com.xayah.core.model.OperationState
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+import kotlin.coroutines.coroutineContext
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
@@ -217,6 +226,8 @@ internal class RestoreServiceLocalImpl @Inject constructor() : AbstractRestoreSe
 
     /**
      * 每个包写回前：解出该包的重型 tar（非 CONFIG 项）到中转目录。
+     * 每个 item 期间接线 restic 下载进度回调，把 "网速 | 已下载 / 总大小" 写入对应 dataType 行，
+     * 并用 bytesWritten/bytesTotal 驱动该行 progress（恢复有总量，可显示真实百分比）。
      */
     override suspend fun onBeforeRestorePackage(p: PackageEntity, t: TaskDetailPackageEntity, userId: Int) {
         val items = mRestoreQueueMap[p.packageName to userId]?.filter { it.dataType != DataType.PACKAGE_CONFIG }
@@ -227,14 +238,101 @@ internal class RestoreServiceLocalImpl @Inject constructor() : AbstractRestoreSe
         }
         val targetPath = transitDirOf(p.packageName, userId)
         val snapshotSubPath = snapshotSubPathOf(p.packageName, userId)
+
         for (item in items) {
             Log.d(mTAG, "解出重型 tar: ${p.packageName}/user_$userId ${item.dataType.type}")
-            val ok = extractOne(
-                item = item,
-                includePath = "${item.dataType.type}.tar",
-                targetPath = targetPath,
-                snapshotSubPath = snapshotSubPath
-            )
+
+            // 下载(解 tar)阶段先把该子项状态置为 PROCESSING，
+            // 使 Card.kt 门控 (state == PROCESSING && progress > 0f) 成立，背景进度条得以填充
+            t.update(dataType = item.dataType, state = OperationState.PROCESSING)
+
+            // 每个 item 独立的进度状态
+            val bytesWrittenRef = AtomicLong(0L)
+            val bytesTotalRef = AtomicLong(0L)
+            val speedRef = AtomicLong(0L)
+            val polling = AtomicBoolean(true)
+
+            // 速度差分基准（仅回调线程访问）
+            var lastTime = System.currentTimeMillis()
+            var lastBytes = 0L
+
+            val progressCallback = object : ResticRepository.ResticProgressCallback {
+                override fun onRestoreProgress(
+                    filesFinished: Long,
+                    filesTotal: Long,
+                    bytesWritten: Long,
+                    bytesTotal: Long,
+                    filesSkipped: Long,
+                    bytesSkipped: Long
+                ) {
+                    bytesWrittenRef.set(bytesWritten)
+                    bytesTotalRef.set(bytesTotal)
+
+                    // 瞬时速度：参照 ResticRestoreViewModel 的差分方式
+                    val now = System.currentTimeMillis()
+                    val timeDiff = now - lastTime
+                    if (timeDiff > 0 && bytesWritten > lastBytes) {
+                        speedRef.set((bytesWritten - lastBytes) * 1000 / timeDiff)
+                    }
+                    lastTime = now
+                    lastBytes = bytesWritten
+                }
+
+                override fun onBackupProgress(
+                    percentDone: Float, bytesDone: Long,
+                    bytesTotal: Long, filesDone: Long, filesTotal: Long,
+                    speed: Long
+                ) {
+                    // 备份进度，恢复不使用
+                }
+            }
+
+            // 轮询协程：每 500ms 把 "速度 | 已下载 / 总大小" + progress 写回该 dataType 行
+            val pollingJob = with(CoroutineScope(coroutineContext)) {
+                launch {
+                    while (polling.get()) {
+                        val speed = speedRef.get()
+                        val speedText = if (speed > 0) speed.formatToStorageSizePerSecond() else ""
+                        val written = bytesWrittenRef.get()
+                        val total = bytesTotalRef.get()
+                        val downloaded = written.toDouble().formatSize()
+                        val totalText = total.toDouble().formatSize()
+                        val content = if (speedText.isNotEmpty()) {
+                            "$speedText | $downloaded / $totalText"
+                        } else {
+                            "$downloaded / $totalText"
+                        }
+                        val progress = if (total > 0) written.toFloat() / total else 0f
+                        t.update(dataType = item.dataType, content = content, progress = progress)
+                        delay(500)
+                    }
+                }
+            }
+
+            val ok = try {
+                extractOne(
+                    item = item,
+                    includePath = "${item.dataType.type}.tar",
+                    targetPath = targetPath,
+                    snapshotSubPath = snapshotSubPath,
+                    progressCallback = progressCallback
+                )
+            } finally {
+                // 停止轮询并定格最终值
+                polling.set(false)
+                pollingJob.cancel()
+                val finalSpeed = speedRef.get()
+                val finalSpeedText = if (finalSpeed > 0) finalSpeed.formatToStorageSizePerSecond() else ""
+                val finalWritten = bytesWrittenRef.get()
+                val finalTotal = bytesTotalRef.get()
+                val finalContent = if (finalSpeedText.isNotEmpty()) {
+                    "$finalSpeedText | ${finalWritten.toDouble().formatSize()} / ${finalTotal.toDouble().formatSize()}"
+                } else {
+                    "${finalWritten.toDouble().formatSize()} / ${finalTotal.toDouble().formatSize()}"
+                }
+                t.update(dataType = item.dataType, content = finalContent, progress = 1f)
+            }
+
             if (!ok) Log.e(mTAG, "重型解出失败: ${p.packageName} ${item.dataType.type}（后续 restore 会因缺 tar 失败并 fail-fast）")
         }
     }

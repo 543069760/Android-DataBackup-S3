@@ -151,7 +151,8 @@ class ResticRepositoryCos @Inject constructor(
                     writtenBytes: Long, writtenSpeed: Long
                 ) {
                     progressCallback.onRestoreProgress(
-                        0L, planFilesTotal, readBytes, planBytesTotal,
+                        0L, planFilesTotal, readBytes,
+                        if (readTotal > 0) readTotal else planBytesTotal,
                         planFilesSkipped, planBytesSkipped
                     )
                 }

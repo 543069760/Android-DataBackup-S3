@@ -1,6 +1,5 @@
 package com.xayah.feature.main.restore
 
-import android.util.Log
 import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -32,11 +31,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.rememberCoroutineScope
-import com.xayah.core.ui.route.MainRoutes
-import com.xayah.core.model.OpType
-import com.xayah.core.util.navigateSingle
-import com.xayah.core.util.encodedURLWithSpace
-import com.xayah.core.model.Target
 import com.xayah.core.ui.component.LocalSlotScope
 import com.xayah.core.ui.component.confirm
 import com.xayah.core.ui.component.BodyMediumText
@@ -52,7 +46,6 @@ import com.xayah.core.model.DataType
 import com.xayah.feature.main.restore.R
 import com.xayah.feature.main.restore.ResticBackupGroup
 import kotlinx.coroutines.launch
-import java.net.URLEncoder
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class, ExperimentalAnimationApi::class)
 @Composable
@@ -62,29 +55,23 @@ fun ResticBackupDetailPage(
     viewModel: ResticRestoreViewModel = hiltViewModel()
 ) {
     val resticProgress by viewModel.resticProgress.collectAsStateWithLifecycle()
-    val dialogState = LocalSlotScope.current!!.dialogSlot  // 新增
+    val dialogState = LocalSlotScope.current!!.dialogSlot
     val coroutineScope = rememberCoroutineScope()
-    val noticeText = stringResource(R.string.restore_dialog_notice)  // 新增：提前 hoist 出对话框标题
+    val noticeText = stringResource(R.string.restore_dialog_notice)
     val confirmDeleteText = stringResource(R.string.restore_confirm_delete_local_app, group.backups.size)
-    val hasConfigSnapshot = group.backups.any { it.dataType == DataType.PACKAGE_CONFIG }
-    // 新增删除状态变量
+    // 删除状态
     val isDeleting = resticProgress.isDeleting
-    val isRestoring = resticProgress.totalDataTypes > 0 &&
-            resticProgress.currentDataTypeIndex < resticProgress.totalDataTypes &&
-            !isDeleting  // 排除删除状态
+    val deleteButtonEnabled = !isDeleting
 
-    val isCompleted = resticProgress.isCompleted && !isDeleting
-    val deleteButtonEnabled = !isRestoring && !isCompleted && !isDeleting
-    val restoreButtonEnabled = !isRestoring && !isCompleted && !isDeleting && hasConfigSnapshot
-
-    // 新增删除进度相关变量
+    // 删除进度相关变量
     val totalSnapshots = group.backups.size
-    val totalSteps = totalSnapshots + 1  // 快照数量 + 1 (prune)
+    val totalSteps = totalSnapshots + 1
     val currentStep = if (isDeleting) {
         resticProgress.currentDataTypeIndex + 1
     } else {
         0
     }
+    val currentIndex = resticProgress.currentDataTypeIndex
 
     // 保留原有的 getCurrentDataTypeName 函数
     fun getCurrentDataTypeName(group: ResticBackupGroup, index: Int): String {
@@ -105,15 +92,6 @@ fun ResticBackupDetailPage(
         } else ""
     }
 
-    // 保留原有的进度计算变量
-    val currentProgress = if (resticProgress.bytesTotal > 0) {
-        resticProgress.bytesWritten.toFloat() / resticProgress.bytesTotal
-    } else 0f
-
-    val currentIndex = resticProgress.currentDataTypeIndex
-    val totalCount = resticProgress.totalDataTypes
-    val speed = resticProgress.speed
-    val progressSize = "${resticProgress.bytesWritten.formatSize()}/${resticProgress.bytesTotal.formatSize()}"
     RestoreScaffold(
         scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(
             rememberTopAppBarState()
@@ -158,49 +136,6 @@ fun ResticBackupDetailPage(
                                             ?.set("restic_needs_refresh", true)
                                         navController.popBackStack()
                                     }
-                                }
-                            }
-                        }
-                    }
-                )
-
-                // 恢复按钮 (保持原有逻辑,但修改 enabled 为 restoreButtonEnabled)
-                ProgressButton(
-                    modifier = Modifier.fillMaxWidth(),
-                    progress = currentProgress,
-                    currentIndex = currentIndex,
-                    totalCount = totalCount,
-                    speed = speed,
-                    progressSize = progressSize,
-                    enabled = restoreButtonEnabled && hasConfigSnapshot,  // 修改这里
-                    text = when {
-                        !hasConfigSnapshot -> stringResource(R.string.restore_incomplete_cannot_restore)  // 新增,放在最前面
-                        isRestoring -> {
-                            val currentDataType = getCurrentDataTypeName(group, currentIndex)
-                            stringResource(R.string.restore_restoring_snapshot, currentDataType)
-                        }
-                        isCompleted -> stringResource(R.string.restore_snapshot_restore_completed)
-                        else -> stringResource(R.string.restore_restore_snapshot_backup)
-                    },
-                    onClick = {
-                        if (!isRestoring && !isCompleted && !isDeleting && hasConfigSnapshot) {  // 添加 hasConfigSnapshot 检查
-                            Log.d("ResticRestore", "用户点击恢复按钮，开始恢复流程")
-                            coroutineScope.launch {
-                                try {
-                                    val success = viewModel.restoreFromResticSnapshots(group)
-                                    if (success) {
-                                        val backupDir = "${viewModel.readBackupDirectory()}/restore/"
-                                        viewModel.refreshLocalDatabase(backupDir)
-                                        viewModel.calculateSizesForActivatedApps()
-                                        val route = MainRoutes.PackagesRestoreProcessingGraph.getRoute(
-                                            cloudName = encodedURLWithSpace,
-                                            backupDir = URLEncoder.encode(backupDir, "UTF-8"),
-                                            packageName = group.packageName
-                                        )
-                                        navController.navigateSingle(route)
-                                    }
-                                } catch (e: Exception) {
-                                    Log.e("ResticRestore", "恢复流程异常: ${e.message}", e)
                                 }
                             }
                         }
