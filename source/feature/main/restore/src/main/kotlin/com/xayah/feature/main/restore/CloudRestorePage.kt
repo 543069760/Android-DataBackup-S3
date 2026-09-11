@@ -1,17 +1,23 @@
 package com.xayah.feature.main.restore
 
 import android.util.Log
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -59,15 +65,14 @@ fun CloudRestorePage(
     val accountId = encodeAccountId(accountName.replace("accountName=", "").decodeURL())
     val scope = rememberCoroutineScope()
 
-    // 多选态
-    var selectionMode by remember { mutableStateOf(false) }
+    // 已选 group 的 key 集合（不再有多选态开关，复选框常驻）
     val selectedKeys: SnapshotStateList<String> = remember { mutableStateListOf<String>() }
+    var isPreparing by remember { mutableStateOf(false) }
     fun keyOf(g: ResticBackupGroup) = "${g.userId}-${g.packageName}-${g.timestamp}"
 
-    // ★ 统一的退出多选态：清空已选集合并关闭多选模式，避免二次进入 Setup 时累加
+    // 统一的退出选择：清空已选集合，避免二次进入 Setup 时累加
     fun exitSelection() {
         selectedKeys.clear()
-        selectionMode = false
     }
 
     LaunchedEffect(accountName) {
@@ -81,7 +86,7 @@ fun CloudRestorePage(
 
     LaunchedEffect(needsRefresh?.value) {
         if (needsRefresh?.value == true) {
-            exitSelection()   // ★ 返回列表时兜底清空多选态，防止残留勾选
+            exitSelection()   // ★ 返回列表时兜底清空勾选，防止残留
             viewModel.forceReload()
             navController.currentBackStackEntry
                 ?.savedStateHandle
@@ -91,7 +96,52 @@ fun CloudRestorePage(
 
     RestoreScaffold(
         scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(rememberTopAppBarState()),
-        title = stringResource(R.string.restore_cloud_restic_restore_title)
+        title = if (selectedKeys.isNotEmpty())
+            stringResource(R.string.restore_selected_count, selectedKeys.size)
+        else
+            stringResource(R.string.restore_cloud_restic_restore_title),
+        floatingActionButton = {
+            AnimatedVisibility(
+                visible = selectedKeys.isNotEmpty(),
+                enter = scaleIn(),
+                exit = scaleOut()
+            ) {
+                ExtendedFloatingActionButton(
+                    onClick = {
+                        if (isPreparing) return@ExtendedFloatingActionButton
+                        val groups = (uiState as? CloudRestoreUiState.Success)?.groups ?: emptyList()
+                        val selectedGroups = groups.filter { selectedKeys.contains(keyOf(it)) }
+                        if (selectedGroups.isEmpty()) return@ExtendedFloatingActionButton
+                        isPreparing = true
+                        scope.launch {
+                            try {
+                                val ok = viewModel.prepareBatchRestore(selectedGroups)
+                                if (ok) {
+                                    exitSelection()   // ★ 成功后立即清空，再导航；防止退回列表时残留累加
+                                    // 第二阶段统一走本地写回：packageName 空 → getPackages 返回全部激活包
+                                    val route = MainRoutes.PackagesRestoreProcessingGraph.getRoute(packageName = "")
+                                    navController.navigateSingle(route)
+                                } else {
+                                    // ★ 失败不清空，保留用户选择以便重试
+                                    Log.e("CloudRestorePage", "prepareBatchRestore 失败，无可恢复项")
+                                }
+                            } catch (e: Exception) {
+                                Log.e("CloudRestorePage", "批量恢复准备异常: ${e.message}", e)
+                            } finally {
+                                isPreparing = false
+                            }
+                        }
+                    },
+                    icon = { Icon(Icons.Rounded.ChevronRight, null) },
+                    text = {
+                        Text(
+                            if (isPreparing) stringResource(R.string.processing)
+                            else stringResource(R.string.restore_next_step)
+                        )
+                    },
+                )
+            }
+        }
     ) {
         Column(
             modifier = Modifier
@@ -133,7 +183,6 @@ fun CloudRestorePage(
 
                                 ResticBackupGroupItem(
                                     group = group,
-                                    selectionMode = selectionMode,
                                     selectable = hasConfigSnapshot,   // 不完整备份不可选
                                     selected = checked,
                                     onSelectedChange = { want ->
@@ -151,16 +200,8 @@ fun CloudRestorePage(
                                             selectedKeys.remove(key)
                                         }
                                     },
-                                    onLongClick = {
-                                        if (!selectionMode) {
-                                            selectionMode = true
-                                            if (hasConfigSnapshot && !selectedKeys.contains(key)) {
-                                                selectedKeys.add(key)
-                                            }
-                                        }
-                                    },
                                     onClick = {
-                                        // 非多选态：单包导航详情页
+                                        // 行点击统一进入详情页（勾选交给右侧复选框）
                                         try {
                                             val groupJson = Json.encodeToString(group)
                                             val encodedJson = URLEncoder.encode(groupJson, "UTF-8")
@@ -178,35 +219,6 @@ fun CloudRestorePage(
                                     context = LocalContext.current,
                                     accountId = accountId,
                                     iconVersion = iconVersion
-                                )
-                            }
-                        }
-
-                        // 下一步：仅多选态且有已选项时可用
-                        if (selectionMode && selectedKeys.isNotEmpty()) {
-                            Button(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(top = SizeTokens.Level8),
-                                onClick = {
-                                    val selectedGroups = currentState.groups.filter { selectedKeys.contains(keyOf(it)) }
-                                    scope.launch {
-                                        val ok = viewModel.prepareBatchRestore(selectedGroups)
-                                        if (ok) {
-                                            exitSelection()   // ★ 成功后立即清空多选态，再导航；防止退回列表时残留累加
-                                            // 第二阶段统一走本地写回：packageName 空 → getPackages 返回全部激活包
-                                            val route = MainRoutes.PackagesRestoreProcessingGraph.getRoute(packageName = "")
-                                            navController.navigateSingle(route)
-                                        } else {
-                                            // ★ 失败不清空，保留用户选择以便重试
-                                            Log.e("CloudRestorePage", "prepareBatchRestore 失败，无可恢复项")
-                                        }
-                                    }
-                                }
-                            ) {
-                                Text(
-                                    text = stringResource(R.string.restore_next_step) +
-                                            " (" + selectedKeys.size + ")"
                                 )
                             }
                         }

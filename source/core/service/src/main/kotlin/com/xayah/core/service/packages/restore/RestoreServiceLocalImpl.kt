@@ -39,6 +39,13 @@ import com.xayah.core.util.localBackupSaveDir
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlin.system.measureTimeMillis
 import javax.inject.Inject
 import java.io.File
 
@@ -151,20 +158,60 @@ internal class RestoreServiceLocalImpl @Inject constructor() : AbstractRestoreSe
         val configItems = mRestoreQueue.filter { it.dataType == DataType.PACKAGE_CONFIG }
         Log.d(mTAG, "onPrepareEntities: 取回 config 项 ${configItems.size} 个")
 
+        // 1) 先分流：磁盘已有 config 直接复用（串行，仅读 json + DB upsert，很快）；
+        //    磁盘缺失的收集起来，走 restic 兜底并发解出
+        val needExtract = mutableListOf<ResticRestoreQueueItem>()
         for (item in configItems) {
             val targetPath = transitDirOf(item.packageName, item.userId)
-            val snapshotSubPath = snapshotSubPathOf(item.packageName, item.userId)
-            val ok = extractOne(
-                item = item,
-                includePath = "package_restore_config.json",
-                targetPath = targetPath,
-                snapshotSubPath = snapshotSubPath
-            )
-            if (!ok) {
-                Log.e(mTAG, "config 取回失败: ${item.packageName}/user_${item.userId}")
-                continue
+            val configFile = File(targetPath, "package_restore_config.json")
+            if (configFile.exists()) {
+                Log.d(
+                    mTAG,
+                    "onPrepareEntities: 复用磁盘已有 config，跳过 restic 重解 ${item.packageName}/user_${item.userId}"
+                )
+                activatePackageFromConfig(item.packageName, item.userId, targetPath)
+            } else {
+                needExtract.add(item)
             }
-            activatePackageFromConfig(item.packageName, item.userId, targetPath)
+        }
+
+        // 2) 兜底：磁盘无 config（例如单包旧路径或阶段1未落盘）才用 restic 解——受限并发
+        if (needExtract.isNotEmpty()) {
+            val semaphore = Semaphore(permits = 3)  // 与云端并发解 config 保持一致，避免连接数过高
+            val extractMs = measureTimeMillis {
+                // 并发只做 restic 解出（重活），DB 激活留到 awaitAll 后单线程执行
+                val results = coroutineScope {
+                    needExtract.map { item ->
+                        async(Dispatchers.IO) {
+                            semaphore.withPermit {
+                                val targetPath = transitDirOf(item.packageName, item.userId)
+                                val snapshotSubPath =
+                                    snapshotSubPathOf(item.packageName, item.userId)
+                                val ok = extractOne(
+                                    item = item,
+                                    includePath = "package_restore_config.json",
+                                    targetPath = targetPath,
+                                    snapshotSubPath = snapshotSubPath
+                                )
+                                Triple(item, targetPath, ok)
+                            }
+                        }
+                    }.awaitAll()
+                }
+
+                // 单线程汇总激活，避免并发写 DB
+                for ((item, targetPath, ok) in results) {
+                    if (!ok) {
+                        Log.e(mTAG, "config 取回失败: ${item.packageName}/user_${item.userId}")
+                        continue
+                    }
+                    activatePackageFromConfig(item.packageName, item.userId, targetPath)
+                }
+            }
+            Log.d(
+                mTAG,
+                "耗时/onPrepareEntities.并发兜底解config: ${extractMs}ms, count=${needExtract.size}"
+            )
         }
     }
 

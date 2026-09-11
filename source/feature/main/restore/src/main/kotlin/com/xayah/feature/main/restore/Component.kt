@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.TopAppBarScrollBehavior
+import androidx.compose.material3.FabPosition
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,6 +51,7 @@ fun RestoreScaffold(
     scrollBehavior: TopAppBarScrollBehavior,
     title: String,
     actions: @Composable (RowScope.() -> Unit)? = null,
+    floatingActionButton: @Composable () -> Unit = {},
     content: @Composable (BoxScope.() -> Unit)
 ) {
     Scaffold(
@@ -60,6 +62,8 @@ fun RestoreScaffold(
                 title = title,
             )
         },
+        floatingActionButton = floatingActionButton,
+        floatingActionButtonPosition = FabPosition.End,
     ) { innerPadding ->
         Column {
             InnerTopSpacer(innerPadding = innerPadding)

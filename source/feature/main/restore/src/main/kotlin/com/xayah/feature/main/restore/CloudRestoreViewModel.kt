@@ -51,6 +51,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlin.system.measureTimeMillis
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.decodeFromString
 import javax.inject.Inject
@@ -107,69 +113,84 @@ class CloudRestoreViewModel @Inject constructor(
                     .onFailure { Log.w(TAG, "prepareBatchRestore: 清空 apps 目录失败(忽略): ${it.message}") }
             }
 
-            val succeededGroups = mutableListOf<ResticBackupGroup>()
-            val failedPackages = mutableListOf<String>()
+            // 每个 group 的解 config 结果：成功则返回 group，失败则返回 packageName
+            data class PrepareResult(val group: ResticBackupGroup, val ok: Boolean)
 
-            for (group in groups) {
-                // 只取该包的 CONFIG 快照
-                val configBackup = group.backups.firstOrNull { it.dataType == DataType.PACKAGE_CONFIG }
-                if (configBackup == null) {
-                    Log.w(TAG, "prepareBatchRestore: ${group.packageName} 无 config 快照，跳过")
-                    failedPackages.add(group.packageName)
-                    continue
+            // 受限并发：最多同时 4 个包解 config，避免云端连接数过高触发限流/失败
+            val semaphore = Semaphore(permits = 4)
+
+            val results: List<PrepareResult>
+            val elapsed = measureTimeMillis {
+                results = coroutineScope {
+                    groups.map { group ->
+                        async(Dispatchers.IO) {
+                            semaphore.withPermit {
+                                // 只取该包的 CONFIG 快照
+                                val configBackup = group.backups.firstOrNull { it.dataType == DataType.PACKAGE_CONFIG }
+                                if (configBackup == null) {
+                                    Log.w(TAG, "prepareBatchRestore: ${group.packageName} 无 config 快照，跳过")
+                                    return@withPermit PrepareResult(group, false)
+                                }
+
+                                val snapshotSubPath = "$backupBaseDir/apps/${group.packageName}/user_${group.userId}"
+                                val fullTargetPath = "${targetBasePath}apps/${group.packageName}/user_${group.userId}/"
+
+                                // 云端按 CloudType 分派解出 config
+                                val ok = runCatching {
+                                    when (cloudEntity.type) {
+                                        CloudType.FTP -> resticRepoFtp.restoreSnapshotFromFtp(
+                                            cloudEntity = cloudEntity, password = password,
+                                            snapshotId = configBackup.snapshotId,
+                                            targetPath = fullTargetPath,
+                                            snapshotSubPath = snapshotSubPath,
+                                            includePath = "package_restore_config.json"
+                                        )
+                                        CloudType.WEBDAV -> resticRepoWebdav.restoreSnapshotFromWebdav(
+                                            cloudEntity = cloudEntity, password = password,
+                                            snapshotId = configBackup.snapshotId,
+                                            targetPath = fullTargetPath,
+                                            snapshotSubPath = snapshotSubPath,
+                                            includePath = "package_restore_config.json"
+                                        )
+                                        CloudType.SFTP -> resticRepoSftp.restoreSnapshotFromSftp(
+                                            cloudEntity = cloudEntity, password = password,
+                                            snapshotId = configBackup.snapshotId,
+                                            targetPath = fullTargetPath,
+                                            snapshotSubPath = snapshotSubPath,
+                                            includePath = "package_restore_config.json"
+                                        )
+                                        else -> resticRepoCos.restoreSnapshotFromCos(
+                                            cloudEntity = cloudEntity, password = password,
+                                            snapshotId = configBackup.snapshotId,
+                                            targetPath = fullTargetPath,
+                                            snapshotSubPath = snapshotSubPath,
+                                            includePath = "package_restore_config.json"
+                                        )
+                                    }
+                                }.getOrElse { e ->
+                                    Log.e(TAG, "prepareBatchRestore: ${group.packageName} config 解出异常: ${e.message}", e)
+                                    false
+                                }
+
+                                // 校验落盘的 config 文件存在
+                                val configExists = File(fullTargetPath, "package_restore_config.json").exists()
+                                if (!ok || !configExists) {
+                                    Log.e(TAG, "prepareBatchRestore: ${group.packageName} config 解出/校验失败，跳过并清理")
+                                    runCatching { File(fullTargetPath).deleteRecursively() }
+                                    return@withPermit PrepareResult(group, false)
+                                }
+
+                                PrepareResult(group, true)
+                            }
+                        }
+                    }.awaitAll()
                 }
-
-                val snapshotSubPath = "$backupBaseDir/apps/${group.packageName}/user_${group.userId}"
-                val fullTargetPath = "${targetBasePath}apps/${group.packageName}/user_${group.userId}/"
-
-                // 云端按 CloudType 分派解出 config（复用 restoreFromCloudSnapshots 的分派）
-                val ok = runCatching {
-                    when (cloudEntity.type) {
-                        CloudType.FTP -> resticRepoFtp.restoreSnapshotFromFtp(
-                            cloudEntity = cloudEntity, password = password,
-                            snapshotId = configBackup.snapshotId,
-                            targetPath = fullTargetPath,
-                            snapshotSubPath = snapshotSubPath,
-                            includePath = "package_restore_config.json"
-                        )
-                        CloudType.WEBDAV -> resticRepoWebdav.restoreSnapshotFromWebdav(
-                            cloudEntity = cloudEntity, password = password,
-                            snapshotId = configBackup.snapshotId,
-                            targetPath = fullTargetPath,
-                            snapshotSubPath = snapshotSubPath,
-                            includePath = "package_restore_config.json"
-                        )
-                        CloudType.SFTP -> resticRepoSftp.restoreSnapshotFromSftp(
-                            cloudEntity = cloudEntity, password = password,
-                            snapshotId = configBackup.snapshotId,
-                            targetPath = fullTargetPath,
-                            snapshotSubPath = snapshotSubPath,
-                            includePath = "package_restore_config.json"
-                        )
-                        else -> resticRepoCos.restoreSnapshotFromCos(
-                            cloudEntity = cloudEntity, password = password,
-                            snapshotId = configBackup.snapshotId,
-                            targetPath = fullTargetPath,
-                            snapshotSubPath = snapshotSubPath,
-                            includePath = "package_restore_config.json"
-                        )
-                    }
-                }.getOrElse { e ->
-                    Log.e(TAG, "prepareBatchRestore: ${group.packageName} config 解出异常: ${e.message}", e)
-                    false
-                }
-
-                // 校验落盘的 config 文件存在
-                val configExists = File(fullTargetPath, "package_restore_config.json").exists()
-                if (!ok || !configExists) {
-                    Log.e(TAG, "prepareBatchRestore: ${group.packageName} config 解出/校验失败，跳过并清理")
-                    runCatching { File(fullTargetPath).deleteRecursively() }
-                    failedPackages.add(group.packageName)
-                    continue
-                }
-
-                succeededGroups.add(group)
             }
+            Log.d(TAG, "耗时/prepareBatchRestore.并发解config: ${elapsed}ms, count=${groups.size}")
+
+            // awaitAll 之后单线程汇总，避免并发写同一个 mutableList
+            val succeededGroups = results.filter { it.ok }.map { it.group }
+            val failedPackages = results.filter { !it.ok }.map { it.group.packageName }
 
             if (succeededGroups.isEmpty()) {
                 Log.e(TAG, "prepareBatchRestore: 无任何包通过校验")
